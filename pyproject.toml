@@ -25,3 +25,10 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+# Hatchling infers the package directory from the project name. The name is
+# tendrl-surface and the directory is surface/, so the inference no longer
+# lands and has to be stated. Without this, metadata generation fails outright
+# and `pip install git+...` cannot build the package at all.
+packages = ["surface"]
