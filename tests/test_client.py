@@ -160,6 +160,33 @@ def test_reject_does_not_falsely_match_other_levels():
     assert result.safety_score.threat_level == "Malicious"
 
 
+def test_reject_matches_recommended_action():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=SCAN_RESPONSE)
+
+    client = _make_client(handler)
+    # "Block" is a recommended action, not a threat level — reject must still match.
+    with pytest.raises(MaliciousFileError):
+        client.scan_file(b"payload", reject=["Block"])
+
+
+def test_scan_decorator_rejects_on_recommended_action():
+    from surface import scan
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=SCAN_RESPONSE)
+
+    ran = []
+
+    @scan(client=_make_client(handler), reject=["Block"])
+    def process(result):
+        ran.append(result)
+
+    with pytest.raises(MaliciousFileError):
+        process(b"payload")
+    assert ran == []  # handler must not run for a rejected file
+
+
 def test_request_id_sent_as_header_not_query():
     captured: dict[str, str] = {}
 

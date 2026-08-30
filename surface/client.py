@@ -169,7 +169,8 @@ class SurfaceClient:
             file: Path string, Path object, bytes, or file-like object.
             defer_scan: If True, returns immediately with a scan ID to poll.
             request_id: Optional client-generated request ID for idempotency.
-            reject: Threat levels to reject. Raises MaliciousFileError if the
+            reject: Threat levels ("Malicious"/"Suspicious") or recommended
+                actions ("Block"/"Review") to reject. Raises MaliciousFileError if the
                 scan result matches. E.g. ``reject=["malicious", "suspicious"]``.
 
         Returns:
@@ -207,11 +208,15 @@ class SurfaceClient:
         result = ScanResult.model_validate(resp.json())
 
         if reject:
-            # threat_level is capitalized server-side ("Clean"/"Suspicious"/
-            # "Malicious"); compare case-insensitively so reject=["malicious"] matches.
+            # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
+            # OR recommended action ("Allow"/"Review"/"Block"); the two vocabularies
+            # don't overlap, so one lowercased set covers both. Case-insensitive.
             reject_levels = {reject} if isinstance(reject, str) else set(reject)
             normalized = {level.lower() for level in reject_levels}
-            if result.safety_score.threat_level.lower() in normalized:
+            if (
+                result.safety_score.threat_level.lower() in normalized
+                or result.safety_score.recommended_action.lower() in normalized
+            ):
                 raise MaliciousFileError(result)
 
         return result
@@ -237,7 +242,8 @@ class SurfaceClient:
             label: Optional label for the scan (e.g. "api-request").
             defer_scan: If True, returns immediately with a scan ID to poll.
             request_id: Optional client-generated request ID.
-            reject: Threat levels to reject. Raises MaliciousFileError if matched.
+            reject: Threat levels ("Malicious"/"Suspicious") or recommended
+                actions ("Block"/"Review") to reject. Raises MaliciousFileError if matched.
 
         Returns:
             ScanResult on synchronous scan (HTTP 200), or
@@ -287,11 +293,15 @@ class SurfaceClient:
         result = ScanResult.model_validate(resp.json())
 
         if reject:
-            # threat_level is capitalized server-side ("Clean"/"Suspicious"/
-            # "Malicious"); compare case-insensitively so reject=["malicious"] matches.
+            # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
+            # OR recommended action ("Allow"/"Review"/"Block"); the two vocabularies
+            # don't overlap, so one lowercased set covers both. Case-insensitive.
             reject_levels = {reject} if isinstance(reject, str) else set(reject)
             normalized = {level.lower() for level in reject_levels}
-            if result.safety_score.threat_level.lower() in normalized:
+            if (
+                result.safety_score.threat_level.lower() in normalized
+                or result.safety_score.recommended_action.lower() in normalized
+            ):
                 raise MaliciousFileError(result)
 
         return result
@@ -496,11 +506,15 @@ class AsyncSurfaceClient:
         result = ScanResult.model_validate(resp.json())
 
         if reject:
-            # threat_level is capitalized server-side ("Clean"/"Suspicious"/
-            # "Malicious"); compare case-insensitively so reject=["malicious"] matches.
+            # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
+            # OR recommended action ("Allow"/"Review"/"Block"); the two vocabularies
+            # don't overlap, so one lowercased set covers both. Case-insensitive.
             reject_levels = {reject} if isinstance(reject, str) else set(reject)
             normalized = {level.lower() for level in reject_levels}
-            if result.safety_score.threat_level.lower() in normalized:
+            if (
+                result.safety_score.threat_level.lower() in normalized
+                or result.safety_score.recommended_action.lower() in normalized
+            ):
                 raise MaliciousFileError(result)
 
         return result
@@ -523,7 +537,8 @@ class AsyncSurfaceClient:
             label: Optional label for the scan.
             defer_scan: If True, returns immediately with a scan ID to poll.
             request_id: Optional client-generated request ID.
-            reject: Threat levels to reject.
+            reject: Threat levels ("Malicious"/"Suspicious") or recommended
+                actions ("Block"/"Review") to reject.
         """
         if isinstance(payload, str):
             body: dict[str, str] = {"payload": payload, "label": label}
@@ -568,11 +583,15 @@ class AsyncSurfaceClient:
         result = ScanResult.model_validate(resp.json())
 
         if reject:
-            # threat_level is capitalized server-side ("Clean"/"Suspicious"/
-            # "Malicious"); compare case-insensitively so reject=["malicious"] matches.
+            # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
+            # OR recommended action ("Allow"/"Review"/"Block"); the two vocabularies
+            # don't overlap, so one lowercased set covers both. Case-insensitive.
             reject_levels = {reject} if isinstance(reject, str) else set(reject)
             normalized = {level.lower() for level in reject_levels}
-            if result.safety_score.threat_level.lower() in normalized:
+            if (
+                result.safety_score.threat_level.lower() in normalized
+                or result.safety_score.recommended_action.lower() in normalized
+            ):
                 raise MaliciousFileError(result)
 
         return result

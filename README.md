@@ -25,13 +25,15 @@ The shortest integration is the `@scan` decorator: hand it a file, your function
 ```python
 from surface import ScanResult, scan
 
-@scan(reject=["malicious", "suspicious"])   # rejected files raise MaliciousFileError
+@scan(reject=["Block"])   # refuse what the scanner recommends blocking
 def process(result: ScanResult):
     print(result.safety_score.threat_level)  # Clean, Suspicious, or Malicious
     # ... your logic runs only for accepted files
 
 process("suspicious.exe")   # you pass the file; process() gets the result
 ```
+
+`reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`) — a rejected file raises `MaliciousFileError` before your function runs.
 
 Prefer to hold the client yourself? The same scan is one method call:
 

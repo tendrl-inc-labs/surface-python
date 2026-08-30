@@ -49,12 +49,17 @@ def scan(
         def process(result: ScanResult):
             ...                             # rejects malicious + suspicious
 
+        @scan(reject="Block")
+        def process(result: ScanResult):
+            ...                             # rejects on the recommended action
+
         @scan(reject="malicious", mode="local")
         def process(result: ScanResult):
             ...                             # local scanner + filtering
     """
-    # threat_level is capitalized server-side ("Clean"/"Suspicious"/"Malicious");
-    # normalize to lowercase so reject="malicious" matches.
+    # reject matches on threat level ("Clean"/"Suspicious"/"Malicious") OR
+    # recommended action ("Allow"/"Review"/"Block") — the two vocabularies don't
+    # overlap, so one lowercased set covers both. reject="block" is the shortest.
     reject_levels: set[str] = set()
     if isinstance(reject, str):
         reject_levels = {reject.lower()}
@@ -83,7 +88,10 @@ def scan(
                     "The @scan decorator does not support deferred scans."
                 )
 
-            if reject_levels and result.safety_score.threat_level.lower() in reject_levels:
+            if reject_levels and (
+                result.safety_score.threat_level.lower() in reject_levels
+                or result.safety_score.recommended_action.lower() in reject_levels
+            ):
                 raise MaliciousFileError(result)
 
             return fn(result, *args, **kwargs)

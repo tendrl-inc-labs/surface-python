@@ -33,6 +33,19 @@ from typing import Any, Callable, Sequence
 logger = logging.getLogger("surface.middleware")
 
 
+def _rejected(safety_score: Any, reject_levels: set[str]) -> bool:
+    """True if the scan's threat level or recommended action is in ``reject_levels``.
+
+    ``reject_levels`` must already be lowercased. Threat levels
+    ("clean"/"suspicious"/"malicious") and recommended actions
+    ("allow"/"review"/"block") don't overlap, so one set covers both.
+    """
+    return (
+        safety_score.threat_level.lower() in reject_levels
+        or safety_score.recommended_action.lower() in reject_levels
+    )
+
+
 def scan_request(
     client: Any,
     *,
@@ -49,14 +62,14 @@ def scan_request(
 
     Args:
         client: SurfaceClient or AsyncSurfaceClient instance.
-        reject: Threat levels to block (default: ["Malicious"]).
+        reject: Threat levels ("Malicious"/"Suspicious") or recommended actions ("Block"/"Review") to block (default: ["Malicious"]).
         label: Label for the scan in history.
         fail_open: If True (default), pass requests through when scanner is unavailable.
         min_size: Minimum body size to scan (skip smaller payloads).
         on_threat: Callback when a threat is detected. Receives (request, scan_result).
         on_error: Callback when scanning fails. Receives (request, error).
     """
-    reject_levels = {reject} if isinstance(reject, str) else set(reject)
+    reject_levels = {reject.lower()} if isinstance(reject, str) else {r.lower() for r in reject}
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -99,7 +112,7 @@ def scan_request(
                     {"error": "security scan unavailable"}, status_code=503
                 )
 
-            if hasattr(result, "safety_score") and result.safety_score.threat_level in reject_levels:
+            if hasattr(result, "safety_score") and _rejected(result.safety_score, reject_levels):
                 if on_threat:
                     on_threat(request, result)
                 from starlette.responses import JSONResponse
@@ -148,7 +161,7 @@ def scan_request(
                     return func(*args, **kwargs)
                 return {"error": "security scan unavailable"}, 503
 
-            if hasattr(result, "safety_score") and result.safety_score.threat_level in reject_levels:
+            if hasattr(result, "safety_score") and _rejected(result.safety_score, reject_levels):
                 if on_threat:
                     on_threat(request, result)
                 return {
@@ -203,7 +216,7 @@ class ScanMiddleware:
     ):
         self.app = app
         self.client = client
-        self.reject_levels = {reject} if isinstance(reject, str) else set(reject)
+        self.reject_levels = {reject.lower()} if isinstance(reject, str) else {r.lower() for r in reject}
         self.paths = paths
         self.label = label
         self.fail_open = fail_open
@@ -285,7 +298,7 @@ class ScanMiddleware:
 
         # Check for threats
         if result and hasattr(result, "safety_score"):
-            if result.safety_score.threat_level in self.reject_levels:
+            if _rejected(result.safety_score, self.reject_levels):
                 if self.on_threat:
                     self.on_threat(path, result)
                 await self._send_json(
