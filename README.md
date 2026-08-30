@@ -20,6 +20,21 @@ pip install "git+https://github.com/tendrl-inc-labs/surface-python"
 
 ## Quick Start — API Mode
 
+The shortest integration is the `@scan` decorator: hand it a file, your function receives the `ScanResult`, and files matching `reject` never reach it.
+
+```python
+from surface import ScanResult, scan
+
+@scan(reject=["malicious", "suspicious"])   # rejected files raise MaliciousFileError
+def process(result: ScanResult):
+    print(result.safety_score.threat_level)  # Clean, Suspicious, or Malicious
+    # ... your logic runs only for accepted files
+
+process("suspicious.exe")   # you pass the file; process() gets the result
+```
+
+Prefer to hold the client yourself? The same scan is one method call:
+
 ```python
 from surface import SurfaceClient
 
