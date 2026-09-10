@@ -226,7 +226,7 @@ async def test_async_reject_and_history_path():
     await client.close()
 
 
-def test_coverage_fields_survive_deserialisation():
+def test_coverage_fields_survive_deserialization():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=MINIMAL_COVERAGE_RESPONSE)
 

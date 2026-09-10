@@ -16,7 +16,7 @@ pip install "git+https://github.com/tendrl-inc-labs/surface-python"
 | Mode | Description | API Key Required | Network Required |
 |------|-------------|-----------------|-----------------|
 | **API** (default) | Sends files to the Surface API | Yes | Yes |
-| **Local** | Sends files to a local scanner daemon | Yes | No |
+| **Local** | Sends files to a local scanner daemon | No | No |
 
 ## Quick Start — API Mode
 
@@ -27,7 +27,7 @@ from surface import ScanResult, scan
 
 @scan(reject=["Block"])   # refuse what the scanner recommends blocking
 def process(result: ScanResult):
-    print(result.safety_score.threat_level)  # Clean, Suspicious, or Malicious
+    print(result.safety_score.threat_level)  # Clean, Informational, Suspicious, or Malicious
     # ... your logic runs only for accepted files
 
 process("suspicious.exe")   # you pass the file; process() gets the result
@@ -48,7 +48,7 @@ client = SurfaceClient("sfk_your_token_here")
 
 # Scan a file
 result = client.scan_file("suspicious.exe")
-print(result.safety_score.threat_level)  # Clean, Suspicious, or Malicious
+print(result.safety_score.threat_level)  # Clean, Informational, Suspicious, or Malicious
 print(result.safety_score.score)          # 0-100 safety score
 
 # Context manager
@@ -81,7 +81,9 @@ The client checks for an API key in this order:
 export SURFACE_KEY="sfk_your_token_here"
 ```
 
-If neither is set, an `AuthenticationError` is raised at construction time.
+In `mode="api"` an `AuthenticationError` is raised at construction time if neither is set.
+
+`mode="local"` is exempt: the local scanner daemon is unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). A key is still needed for the hosted calls — `get_usage`, `get_account`, the profile and API-key methods, and `get_scan_history` — which always go to the Surface API regardless of mode.
 
 ## Scanning Files
 
@@ -115,7 +117,7 @@ async with AsyncSurfaceClient() as client:
     result = await client.scan_payload("<?php system('id');", "test.php")
 ```
 
-String payloads are sent as raw text to `POST /api/scan/payload` (max 10 MB). Binary `bytes` payloads are automatically base64-encoded by the SDK. Auth, billing, and response format are identical to `scan_file`.
+String payloads are sent as raw text to `POST /api/scan/payload`. Binary `bytes` payloads are automatically base64-encoded by the SDK. Auth, billing, and response format are identical to `scan_file`.
 
 ## Agentic Security
 
@@ -179,7 +181,9 @@ from surface.middleware import ScanMiddleware
 app.add_middleware(ScanMiddleware, client=client, reject=["Malicious"], fail_open=True)
 ```
 
-Flask sync routes are also supported via the same `@scan_request` decorator. Options: `reject`, `label`, `fail_open`, `min_size`, `paths`, `on_threat`, `on_error`.
+Flask sync routes are also supported via the same `@scan_request` decorator.
+
+`@scan_request` options: `reject`, `label`, `fail_open`, `min_size`, `on_threat`, `on_error`. `ScanMiddleware` takes the same set plus `paths`, a list of glob patterns limiting which request paths it scans (e.g. `paths=["/api/*", "/agent/*"]`); `paths` is application-wide, so the per-route decorator has no such option.
 
 ## Account & Usage
 
@@ -224,7 +228,7 @@ profile = client.create_profile(
 )
 ```
 
-New accounts automatically get three built-in profiles: **Default** (common file types, all engines), **All File Types** (all types, all engines), and **Agentic** (all types, strict sensitive data detection, auto IP blocking — optimized for agent-to-agent middleware).
+Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/profiles/) for what a new account starts with.
 
 ## API Keys
 
