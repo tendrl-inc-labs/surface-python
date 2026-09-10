@@ -22,10 +22,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # The repo declares its own test deps, including pytest-asyncio, which
+      # asyncio_mode = "auto" and the async tests both need. Installing a bare
+      # pytest instead silently turns those into failures.
       - name: Install
-        run: |
-          pip install -e .
-          pip install pytest
+        run: pip install -e ".[dev]"
 
       - name: Import on the declared floor
         run: python -c "import surface; print(surface.__name__, 'imports')"
