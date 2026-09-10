@@ -1,0 +1,44 @@
+name: CI
+
+# The repo had tests but nothing ran them on push.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the declared floor and the one that needs eval_type_backport
+        # for models.py's `list[str] | None`; 3.12 is the common case.
+        python-version: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          pip install -e .
+          pip install pytest
+
+      - name: Import on the declared floor
+        run: python -c "import surface; print(surface.__name__, 'imports')"
+
+      - name: Test
+        run: pytest -q
+
+      # A suite that collects nothing must not report success.
+      - name: Tests must have run
+        run: |
+          count=$(pytest --collect-only -q 2>/dev/null | grep -cE '::') || true
+          if [ "${count:-0}" -eq 0 ]; then
+            echo "::error::no tests were collected"
+            exit 1
+          fi
+          echo "collected $count test(s)"
