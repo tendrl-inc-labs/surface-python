@@ -228,7 +228,7 @@ profile = client.create_profile(
 )
 ```
 
-Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/profiles/) for what a new account starts with.
+Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/scan-profiles/) for what a new account starts with.
 
 ## API Keys
 
