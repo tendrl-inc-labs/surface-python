@@ -28,6 +28,7 @@ class ActionContext(BaseModel):
     """
 
     principal_domains: list[str] | None = None
+    allowed_egress: list[str] | None = None
     known_payees: list[ActionPayee] | None = None
     user_request: str | None = None
 

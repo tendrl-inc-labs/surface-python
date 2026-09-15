@@ -131,6 +131,7 @@ result = client.scan_payload(
     "agent-step.json",
     context=ActionContext(
         principal_domains=["acme.io"],                                  # what counts as "inside"
+        allowed_egress=["api.stripe.com", "hooks.slack.com"],           # outside hosts you legitimately call
         known_payees=[ActionPayee(name="Delta", iban="GB29NWBK60161331926819")],
         user_request=user_message,                                     # what the user actually asked
     ),
@@ -141,7 +142,7 @@ result = client.scan_payload(
 **Use cases**
 
 - **Payments** — a `create_payment`/`transfer` to an account not in `known_payees` is Blocked; to a known payee it is Allowed.
-- **Data egress** — an email or upload leaving `principal_domains` (or to a free-mail address) is flagged; a recipient the user named in `user_request` is cleared.
+- **Data egress** — an email or upload leaving `principal_domains` (or to a free-mail address) is flagged; a recipient the user named in `user_request` is cleared. With `allowed_egress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
 - **Task fit** — an action unrelated to `user_request` (a refund during "summarize my tickets") is surfaced.
 
 **Suggested implementation**

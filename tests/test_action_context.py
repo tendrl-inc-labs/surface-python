@@ -42,6 +42,7 @@ def test_context_forwarded_in_body():
         "payment.json",
         context=ActionContext(
             principal_domains=["acme.io"],
+            allowed_egress=["api.stripe.com", "hooks.slack.com"],
             known_payees=[ActionPayee(name="Delta", iban="GB29NWBK60161331926819")],
             user_request="pay this month's invoices",
         ),
@@ -49,6 +50,7 @@ def test_context_forwarded_in_body():
     ctx = seen.get("context")
     assert ctx, f"no context in body: {seen}"
     assert ctx["user_request"] == "pay this month's invoices"
+    assert ctx["allowed_egress"] == ["api.stripe.com", "hooks.slack.com"]
     assert ctx["known_payees"][0]["iban"] == "GB29NWBK60161331926819"
     # exclude_none keeps the payload lean.
     assert "account" not in ctx["known_payees"][0]
