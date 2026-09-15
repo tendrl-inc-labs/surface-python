@@ -20,6 +20,7 @@ from .errors import (
     ValidationError,
 )
 from .models import (
+    ActionContext,
     APIKey,
     DeferredScanResponse,
     ScanHistoryPage,
@@ -229,6 +230,7 @@ class SurfaceClient:
         defer_scan: bool = False,
         request_id: str | None = None,
         reject: str | list[str] | None = None,
+        context: ActionContext | dict | None = None,
     ) -> ScanResult | DeferredScanResponse:
         """Scan a raw payload without file upload overhead.
 
@@ -263,6 +265,13 @@ class SurfaceClient:
                     "encoding": "base64",
                     "label": label,
                 }
+
+        if context is not None:
+            body["context"] = (
+                context.model_dump(exclude_none=True)
+                if isinstance(context, ActionContext)
+                else context
+            )
 
         params: dict[str, str] = {}
         if defer_scan:
@@ -527,6 +536,7 @@ class AsyncSurfaceClient:
         defer_scan: bool = False,
         request_id: str | None = None,
         reject: str | list[str] | None = None,
+        context: ActionContext | dict | None = None,
     ) -> ScanResult | DeferredScanResponse:
         """Scan a raw payload without file upload overhead (async).
 
@@ -553,6 +563,13 @@ class AsyncSurfaceClient:
                     "encoding": "base64",
                     "label": label,
                 }
+
+        if context is not None:
+            body["context"] = (
+                context.model_dump(exclude_none=True)
+                if isinstance(context, ActionContext)
+                else context
+            )
 
         params: dict[str, str] = {}
         if defer_scan:
