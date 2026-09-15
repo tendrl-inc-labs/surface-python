@@ -119,6 +119,37 @@ async with AsyncSurfaceClient() as client:
 
 String payloads are sent as raw text to `POST /api/scan/payload`. Binary `bytes` payloads are automatically base64-encoded by the SDK. Auth, billing, and response format are identical to `scan_file`.
 
+## Action Screening Context
+
+When you scan a tool call an agent is about to make, some actions are dangerous on their own (deleting a database, a secret in a URL) and some are dangerous only relative to *you* — a payment is fine to a known vendor but not to an account you've never paid; an email is fine to a colleague but not leaving to a personal address. The scanner sees the tool call but not your vendor list, your domains, or what the user asked. Pass `context` so it can decide confidently instead of defaulting to a cautious "Review".
+
+```python
+from surface import ActionContext, ActionPayee
+
+result = client.scan_payload(
+    tool_call_json,
+    "agent-step.json",
+    context=ActionContext(
+        principal_domains=["acme.io"],                                  # what counts as "inside"
+        known_payees=[ActionPayee(name="Delta", iban="GB29NWBK60161331926819")],
+        user_request=user_message,                                     # what the user actually asked
+    ),
+)
+# A plain dict works too: context={"principal_domains": ["acme.io"]}
+```
+
+**Use cases**
+
+- **Payments** — a `create_payment`/`transfer` to an account not in `known_payees` is Blocked; to a known payee it is Allowed.
+- **Data egress** — an email or upload leaving `principal_domains` (or to a free-mail address) is flagged; a recipient the user named in `user_request` is cleared.
+- **Task fit** — an action unrelated to `user_request` (a refund during "summarize my tickets") is surfaced.
+
+**Suggested implementation**
+
+- Build `context` from your **trusted application state** — your billing system's payee list, your configured domains, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
+- `context` is optional. Omit it and screening still runs on face value — nothing dangerous on its own is missed.
+- Only what you put in `context` is sent with the scan (for hosted scans, to the API). Keep `user_request` to the instruction itself.
+
 ## Agentic Security
 
 Payload scan results may include additional threat detection from agentic security engines. These fields are present on `ScanResult` as `dict | None`:

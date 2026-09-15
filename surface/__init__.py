@@ -14,6 +14,8 @@ from .errors import (
 from .models import (
     APIKey,
     Account,
+    ActionContext,
+    ActionPayee,
     AnalysisIndicator,
     ArchiveEntry,
     BoxJSFile,
@@ -67,6 +69,8 @@ __all__ = [
     # Models
     "Account",
     "APIKey",
+    "ActionContext",
+    "ActionPayee",
     "AnalysisIndicator",
     "ArchiveEntry",
     "BoxJSFile",
