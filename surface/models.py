@@ -9,27 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field
 # Scan response models (camelCase JSON keys)
 # ---------------------------------------------------------------------------
 
-class ActionPayee(BaseModel):
-    """An account the caller legitimately pays. Give whichever identifier your
-    payments use; the screener matches on any provided."""
-
-    name: str | None = None
-    iban: str | None = None
-    account: str | None = None
-
-
 class ActionContext(BaseModel):
     """Caller-supplied context for action screening of tool-call payloads.
 
     Lets the screener tell an action that fits who you are and what the user
-    asked (a payment to a known payee, an email the user requested) from one
+    asked (data going to a declared host, an email the user requested) from one
     that does not. Build it from trusted application state — never from the
     content being scanned. See the "Action Screening Context" README section.
     """
 
     principal_domains: list[str] | None = None
     allowed_egress: list[str] | None = None
-    known_payees: list[ActionPayee] | None = None
     user_request: str | None = None
 
 
