@@ -261,6 +261,10 @@ class ScanResult(BaseModel):
     prompt_injection: dict | None = Field(None, alias="promptInjection")
     sensitive_data: dict | None = Field(None, alias="sensitiveData")
     tool_call_analysis: dict | None = Field(None, alias="toolCallAnalysis")
+    # Action screening: {detected, toolCalls, findings:[{toolName, category,
+    # severity, reason, evidence}], contextual}. Present when a tool call was
+    # flagged; the reason is also mirrored in safety_score.primary_threat.
+    action_screen: dict | None = Field(None, alias="actionScreen")
 
 
 class DeferredScanResponse(BaseModel):
