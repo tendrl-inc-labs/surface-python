@@ -2,6 +2,13 @@
 
 from .client import AsyncSurfaceClient, SurfaceClient, verify_webhook_signature
 from .decorator import MaliciousFileError, scan
+from .guard import (
+    AsyncToolGuard,
+    Decision,
+    ToolBlocked,
+    ToolGuard,
+    tool_call_json,
+)
 from .middleware import ScanMiddleware, scan_request
 from .errors import (
     AuthenticationError,
@@ -53,6 +60,11 @@ __all__ = [
     "AsyncSurfaceClient",
     "SurfaceClient",
     "scan",
+    "ToolGuard",
+    "AsyncToolGuard",
+    "Decision",
+    "ToolBlocked",
+    "tool_call_json",
     "MaliciousFileError",
     "verify_webhook_signature",
     # Errors

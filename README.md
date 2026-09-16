@@ -150,6 +150,39 @@ result = client.scan_payload(
 - `context` is optional. Omit it and screening still runs on face value — nothing dangerous on its own is missed.
 - Only what you put in `context` is sent with the scan (for hosted scans, to the API). Keep `user_request` to the instruction itself.
 
+### Guarding an agent's tool calls
+
+Action screening is not automatic — you run it in your agent loop, around tool execution. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire the scan and the verdict check each time. Either call `screen()` and branch, or `wrap()` a tool so it screens before it runs.
+
+```python
+from surface import SurfaceClient, ToolGuard, ActionContext, ToolBlocked
+
+guard = ToolGuard(
+    SurfaceClient(),
+    # context comes from your trusted request state, never the tool arguments
+    context=lambda name, args: ActionContext(
+        principal_domains=["acme.io"],
+        allowed_egress=["api.stripe.com", "hooks.slack.com"],
+        user_request=session.user_message,
+    ),
+)
+
+# Option A — decide yourself
+d = guard.screen(call.name, call.args)
+if d.blocked:        refuse(d.reason)
+elif d.needs_review: escalate_to_human(call, d)
+else:                run(call)
+
+# Option B — wrap the tool; it raises ToolBlocked instead of running on Block
+safe_transfer = guard.wrap(transfer_funds)
+try:
+    safe_transfer(to="acct_…", amount=4800)
+except ToolBlocked as e:
+    log(e.decision.reason, e.decision.findings)   # the offending action + evidence
+```
+
+`AsyncToolGuard` is the awaitable variant. The docstrings in [`surface/guard.py`](surface/guard.py) show wiring for LangChain/LangGraph and the OpenAI Agents SDK; the pattern is the same either way — the host screens, the model never scans itself.
+
 ## Agentic Security
 
 Payload scan results may include additional threat detection from agentic security engines. These fields are present on `ScanResult` as `dict | None`:
