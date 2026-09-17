@@ -1,8 +1,7 @@
 """Pydantic AI drop-in guard wiring (skipped unless pydantic-ai is installed).
 
-Surface itself stays on Python 3.9; Pydantic AI needs 3.10+. These tests exercise
-the documented Hooks.before_tool_execute mapping against pydantic-ai's TestModel
-and a fake Surface client — no live scanner or API key.
+These tests exercise the documented Hooks.before_tool_execute mapping against
+pydantic-ai's TestModel and a fake Surface client — no live scanner or API key.
 """
 from __future__ import annotations
 

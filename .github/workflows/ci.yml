@@ -12,9 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 is the declared floor and the one that needs eval_type_backport
-        # for models.py's `list[str] | None`; 3.12 is the common case.
-        python-version: ['3.9', '3.12']
+        # 3.11 is the declared floor (3.9 is EOL; 3.10 is weeks from EOL).
+        # 3.14 is current CPython.
+        python-version: ['3.11', '3.14']
     steps:
       - uses: actions/checkout@v4
 

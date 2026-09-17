@@ -1,4 +1,4 @@
-"""Pydantic AI support agent with AsyncToolGuard (Python 3.10+).
+"""Pydantic AI support agent with AsyncToolGuard.
 
 Uses TestModel so it runs without an LLM key. Screens every tool through
 the hosted API when SURFACE_KEY is set. Writes traces to SURFACE_TRACE.

@@ -277,7 +277,9 @@ class SurfaceClient:
                 }
 
         if context is not None:
-            body["context"] = parse_action_context(context).model_dump(exclude_none=True)
+            parsed = parse_action_context(context)
+            if isinstance(parsed, ActionContext):
+                body["context"] = parsed.model_dump(exclude_none=True)
 
         params: dict[str, str] = {}
         if defer_scan:
@@ -573,7 +575,9 @@ class AsyncSurfaceClient:
                 }
 
         if context is not None:
-            body["context"] = parse_action_context(context).model_dump(exclude_none=True)
+            parsed = parse_action_context(context)
+            if isinstance(parsed, ActionContext):
+                body["context"] = parsed.model_dump(exclude_none=True)
 
         params: dict[str, str] = {}
         if defer_scan:

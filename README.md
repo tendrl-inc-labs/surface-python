@@ -451,5 +451,5 @@ except SurfaceError as e:
 
 ## Requirements
 
-- Python 3.9+
+- Python 3.11+
 - `httpx[http2]`, `pydantic` v2
