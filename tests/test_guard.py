@@ -1,10 +1,23 @@
 """Tests for the tool-call ToolGuard adapter (no live API)."""
 import asyncio
-
+import json
 import pytest
 
-from surface import ActionContext, AsyncToolGuard, ToolBlocked, ToolGuard, tool_call_json
+from surface import (
+    ActionContext,
+    AsyncToolGuard,
+    ToolBlocked,
+    ToolGuard,
+    jsonl_trace,
+    tool_call_json,
+)
 from surface.models import ScanResult
+
+CTX = ActionContext(
+    principal_domains=["acme.io"],
+    allowed_egress=["api.stripe.com"],
+    user_request="pay the vendor",
+)
 
 
 def _result(action: str, reason: str = "", findings=None) -> ScanResult:
@@ -51,8 +64,15 @@ def test_tool_call_json_shape():
 
 @pytest.mark.parametrize("action", ["Allow", "Review", "Block"])
 def test_screen_returns_decision(action):
-    d = ToolGuard(FakeClient(action, reason="r")).screen("t", {"a": 1})
+    d = ToolGuard(FakeClient(action, reason="r"), context=CTX).screen("t", {"a": 1})
     assert d.action == action
+    assert d.tool == "t"
+    assert d.context_present
+    assert d.context_fields == {
+        "principal_domains": True,
+        "allowed_egress": True,
+        "user_request": True,
+    }
     assert (d.allowed, d.needs_review, d.blocked) == (
         action == "Allow",
         action == "Review",
@@ -60,14 +80,54 @@ def test_screen_returns_decision(action):
     )
 
 
+def test_context_optional():
+    fc = FakeClient("Allow")
+    d = ToolGuard(fc).screen("t", {"a": 1})
+    assert d.action == "Allow"
+    assert d.context_present is False
+    assert fc.calls[0][2] is None
+
+
+def test_invalid_context_rejected():
+    with pytest.raises(Exception, match="list of strings"):
+        ToolGuard(FakeClient("Allow"), context={"principal_domains": "acme.io"}).screen(
+            "t", {}
+        )
+
+
 def test_context_and_label_forwarded():
     fc = FakeClient("Allow")
-    guard = ToolGuard(fc, context=lambda name, args: ActionContext(principal_domains=["acme.io"]))
+    guard = ToolGuard(
+        fc, context=lambda name, args: ActionContext(principal_domains=["acme.io"])
+    )
     guard.screen("http_request", {"url": "https://x"})
     payload, label, ctx = fc.calls[0]
     assert '"tool": "http_request"' in payload
     assert label == "http_request.toolcall.json"
     assert ctx.principal_domains == ["acme.io"]
+
+
+def test_jsonl_trace(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    seen = []
+    guard = ToolGuard(
+        FakeClient(
+            "Review",
+            reason="outside",
+            findings=[{"reason": "Sends data to a recipient outside the organization's domains"}],
+        ),
+        context=CTX,
+        on_decision=lambda d: (seen.append(d), jsonl_trace(path)(d)),
+    )
+    d = guard.screen("send_email", {"to": "ap@maple.com"})
+    assert seen == [d]
+    rec = json.loads(path.read_text().splitlines()[0])
+    assert rec["tool"] == "send_email"
+    assert rec["action"] == "Review"
+    assert rec["context_present"] is True
+    assert rec["context_fields"]["user_request"] is True
+    assert "args" not in rec
+    assert rec["findings"][0].startswith("Sends data")
 
 
 def test_wrap_allows_and_runs():
@@ -77,7 +137,7 @@ def test_wrap_allows_and_runs():
         ran.append(kw)
         return "done"
 
-    safe = ToolGuard(FakeClient("Allow")).wrap(transfer)
+    safe = ToolGuard(FakeClient("Allow"), context=CTX).wrap(transfer)
     assert safe(amount=10) == "done"
     assert ran == [{"amount": 10}]
 
@@ -93,7 +153,8 @@ def test_wrap_blocks_and_does_not_run():
             "Block",
             reason="Sends data to a bare-IP address",
             findings=[{"toolName": "transfer", "reason": "Sends data to a bare-IP address", "evidence": "..."}],
-        )
+        ),
+        context=CTX,
     )
     with pytest.raises(ToolBlocked) as ei:
         guard.wrap(transfer)(amount=10)
@@ -107,9 +168,9 @@ def test_review_runs_unless_configured_to_block():
     def t(**kw):
         return "ok"
 
-    assert ToolGuard(FakeClient("Review")).wrap(t)(x=1) == "ok"
+    assert ToolGuard(FakeClient("Review"), context=CTX).wrap(t)(x=1) == "ok"
     with pytest.raises(ToolBlocked):
-        ToolGuard(FakeClient("Review"), block_on_review=True).wrap(t)(x=1)
+        ToolGuard(FakeClient("Review"), context=CTX, block_on_review=True).wrap(t)(x=1)
 
 
 def test_async_guard_blocks_and_allows():
@@ -123,8 +184,8 @@ def test_async_guard_blocks_and_allows():
     async def tool(**kw):
         return "ran"
 
-    blocked = AsyncToolGuard(AsyncFake("Block")).wrap(tool)
-    allowed = AsyncToolGuard(AsyncFake("Allow")).wrap(tool)
+    blocked = AsyncToolGuard(AsyncFake("Block"), context=CTX).wrap(tool)
+    allowed = AsyncToolGuard(AsyncFake("Allow"), context=CTX).wrap(tool)
 
     async def run_blocked():
         try:

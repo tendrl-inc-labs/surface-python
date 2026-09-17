@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -15,12 +15,47 @@ class ActionContext(BaseModel):
     Lets the screener tell an action that fits who you are and what the user
     asked (data going to a declared host, an email the user requested) from one
     that does not. Build it from trusted application state — never from the
-    content being scanned. See the "Action Screening Context" README section.
+    content being scanned.
+
+    Every field is optional. Omit context, or omit a field, and that check
+    stays silent (only face-dangerous actions still flag). Values that *are*
+    passed are validated (a domain list must be a list of strings, not a
+    single string). See the "Action Screening Context" README section.
     """
 
     principal_domains: list[str] | None = None
     allowed_egress: list[str] | None = None
     user_request: str | None = None
+
+    @field_validator("principal_domains", "allowed_egress", mode="before")
+    @classmethod
+    def _host_list(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, str) or not isinstance(v, (list, tuple)):
+            raise ValueError("must be a list of strings")
+        for item in v:
+            if not isinstance(item, str):
+                raise ValueError("must be a list of strings")
+        return list(v)
+
+    @field_validator("user_request", mode="before")
+    @classmethod
+    def _request_str(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        return v
+
+
+def parse_action_context(ctx: object) -> ActionContext | None:
+    """Validate caller context if present; None stays None."""
+    if ctx is None:
+        return None
+    if isinstance(ctx, ActionContext):
+        return ctx
+    return ActionContext.model_validate(ctx)
 
 
 class CVEInfo(BaseModel):

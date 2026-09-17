@@ -98,6 +98,14 @@ def test_default_base_url_is_real_service_base():
     assert client.base_url == "https://app.tendrl.com/surface/api"
 
 
+def test_base_url_from_env(monkeypatch):
+    monkeypatch.setenv("SURFACE_BASE_URL", "https://example.invalid/surface/api")
+    client = SurfaceClient(api_key="sfk_test")
+    assert client.base_url == "https://example.invalid/surface/api"
+    explicit = SurfaceClient(api_key="sfk_test", base_url="https://other.invalid/surface/api")
+    assert explicit.base_url == "https://other.invalid/surface/api"
+
+
 def test_usage_parses_backend_field_names():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path.endswith("/account/usage")

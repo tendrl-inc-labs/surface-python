@@ -83,6 +83,8 @@ export SURFACE_KEY="sfk_your_token_here"
 
 In `mode="api"` an `AuthenticationError` is raised at construction time if neither is set.
 
+The hosted API URL defaults to production (`https://app.tendrl.com/surface/api`). Override with `base_url=` or `SURFACE_BASE_URL`.
+
 `mode="local"` is exempt: the local scanner daemon is unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). A key is still needed for the hosted calls — `get_usage`, `get_account`, the profile and API-key methods, and `get_scan_history` — which always go to the Surface API regardless of mode.
 
 ## Scanning Files
@@ -144,27 +146,31 @@ result = client.scan_payload(
 - **Dangerous on its face** — a crypto-address payout, a gift-card purchase that returns the codes, `rm -rf` of a data directory, or an admin grant is flagged with no context needed.
 - **Task fit** — an action unrelated to `user_request` (a refund during "summarize my tickets") is surfaced.
 
-**Suggested implementation**
+**Optional, validated if present**
 
 - Build `context` from your **trusted application state** — your configured domains, your known integration hosts, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
-- `context` is optional. Omit it and screening still runs on face value — nothing dangerous on its own is missed.
+- Every field is optional on both `scan_payload` and `ToolGuard` / `AsyncToolGuard`. Pass only what you have. A field you omit stays silent: outside-org email will not Review without domains, undeclared hosts will not Review without egress, task-fit will not Review without the request. Without any context, only face-dangerous actions flag.
+- Values that *are* passed are validated (a domain list must be a list of strings, not a single string).
 - Only what you put in `context` is sent with the scan (for hosted scans, to the API). Keep `user_request` to the instruction itself.
+
+Pass `on_decision=jsonl_trace(path)` (or set `SURFACE_TRACE` in the [example agents](examples/)) to record Allow / Review / Block and whether context was present, without logging tool arguments.
 
 ### Guarding an agent's tool calls
 
 Action screening is not automatic — you run it in your agent loop, around tool execution. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire the scan and the verdict check each time. Either call `screen()` and branch, or `wrap()` a tool so it screens before it runs.
 
 ```python
-from surface import SurfaceClient, ToolGuard, ActionContext, ToolBlocked
+from surface import SurfaceClient, ToolGuard, ActionContext, ToolBlocked, jsonl_trace
 
 guard = ToolGuard(
     SurfaceClient(),
-    # context comes from your trusted request state, never the tool arguments
+    # fields you have, from trusted request state, never the tool arguments
     context=lambda name, args: ActionContext(
         principal_domains=["acme.io"],
         allowed_egress=["api.stripe.com", "hooks.slack.com"],
         user_request=session.user_message,
     ),
+    on_decision=jsonl_trace("/var/log/surface-toolguard.jsonl"),
 )
 
 # Option A — decide yourself
@@ -181,7 +187,53 @@ except ToolBlocked as e:
     log(e.decision.reason, e.decision.findings)   # the offending action + evidence
 ```
 
-`AsyncToolGuard` is the awaitable variant. The docstrings in [`surface/guard.py`](surface/guard.py) show wiring for LangChain/LangGraph and the OpenAI Agents SDK; the pattern is the same either way — the host screens, the model never scans itself.
+`AsyncToolGuard` is the awaitable variant. The docstrings in [`surface/guard.py`](surface/guard.py) show wiring for LangChain/LangGraph, the OpenAI Agents SDK, and Pydantic AI; the pattern is the same either way — the host screens, the model never scans itself.
+
+### Pydantic AI
+
+Pydantic AI's loop is async, so use `AsyncToolGuard` and screen in a `before_tool_execute` hook. That covers every tool on the agent, including MCP toolsets. Map **Block** to `ToolFailed` (the model sees the refusal; the tool never runs) and **Review** to `ApprovalRequired` (native human-in-the-loop). Do not `wrap()` the tool function: `ToolBlocked` aborts the whole run, and Pydantic AI inspects signatures to build tool schemas.
+
+```python
+from pydantic_ai import Agent, DeferredToolRequests, RunContext, ToolDefinition
+from pydantic_ai.capabilities import Hooks, ValidatedToolArgs
+from pydantic_ai.exceptions import ApprovalRequired, ToolFailed
+from pydantic_ai.messages import ToolCallPart
+from surface import ActionContext, AsyncSurfaceClient, AsyncToolGuard
+
+hooks = Hooks()
+guard = AsyncToolGuard(
+    AsyncSurfaceClient(),
+    # context comes from your trusted request state, never the tool arguments
+    context=lambda name, args: ActionContext(
+        principal_domains=["acme.io"],
+        allowed_egress=["api.stripe.com", "hooks.slack.com"],
+        user_request=session.user_message,
+    ),
+)
+
+@hooks.on.before_tool_execute
+async def surface_guard(
+    ctx: RunContext,
+    *,
+    call: ToolCallPart,
+    tool_def: ToolDefinition,
+    args: ValidatedToolArgs,
+) -> ValidatedToolArgs:
+    d = await guard.screen(call.tool_name, args)
+    if d.blocked:
+        raise ToolFailed(d.reason)
+    if d.needs_review:
+        raise ApprovalRequired()
+    return args
+
+agent = Agent(
+    "openai:gpt-4o",
+    capabilities=[hooks],
+    output_type=[str, DeferredToolRequests],
+)
+```
+
+To screen one toolset only (a `FunctionToolset` or an MCP server), subclass `WrapperToolset` and call `guard.screen(name, tool_args)` in `call_tool` before `super().call_tool(...)`, raising the same two exceptions.
 
 ## Agentic Security
 
