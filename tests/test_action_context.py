@@ -6,8 +6,11 @@ import json
 
 import httpx
 
+import pytest
+from pydantic import ValidationError
+
 from surface import SurfaceClient
-from surface.models import ActionContext
+from surface.models import ActionContext, parse_action_context
 
 def _resp(level: str, action: str) -> dict:
     return {
@@ -63,6 +66,28 @@ def test_context_accepts_plain_dict():
 
     _client(handler).scan_payload("x", context={"principal_domains": ["acme.io"]})
     assert seen["context"] == {"principal_domains": ["acme.io"]}
+
+
+def test_partial_context_is_forwarded():
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=CLEAN)
+
+    _client(handler).scan_payload(
+        "x", context=ActionContext(user_request="summarize tickets")
+    )
+    assert seen["context"] == {"user_request": "summarize tickets"}
+
+
+def test_invalid_context_shape_rejected():
+    with pytest.raises(ValidationError, match="list of strings"):
+        parse_action_context({"principal_domains": "acme.io"})
+    with pytest.raises(ValidationError, match="list of strings"):
+        _client(lambda r: httpx.Response(200, json=CLEAN)).scan_payload(
+            "x", context={"allowed_egress": "api.stripe.com"}
+        )
 
 
 def test_context_absent_when_not_supplied():

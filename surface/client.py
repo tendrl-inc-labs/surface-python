@@ -27,9 +27,17 @@ from .models import (
     ScanProfile,
     ScanResult,
     Usage,
+    parse_action_context,
 )
 
 FileInput = Union[str, Path, bytes, IO[bytes]]
+
+
+_DEFAULT_BASE_URL = "https://app.tendrl.com/surface/api"
+
+
+def _resolve_base_url(base_url: str | None) -> str:
+    return (base_url or os.environ.get("SURFACE_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
 
 
 def _resolve_api_key(api_key: str | None, *, required: bool = True) -> str | None:
@@ -101,12 +109,12 @@ class SurfaceClient:
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = "https://app.tendrl.com/surface/api",
+        base_url: str | None = None,
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
     ):
         self.mode = mode
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
         self.api_key = _resolve_api_key(api_key, required=(mode != "local"))
         self._scanner_client: httpx.Client | None = None
@@ -246,6 +254,8 @@ class SurfaceClient:
             request_id: Optional client-generated request ID.
             reject: Threat levels ("Malicious"/"Suspicious") or recommended
                 actions ("Block"/"Review") to reject. Raises MaliciousFileError if matched.
+            context: Optional action-screening context. Fields you omit stay
+                silent; values you pass are validated.
 
         Returns:
             ScanResult on synchronous scan (HTTP 200), or
@@ -267,11 +277,7 @@ class SurfaceClient:
                 }
 
         if context is not None:
-            body["context"] = (
-                context.model_dump(exclude_none=True)
-                if isinstance(context, ActionContext)
-                else context
-            )
+            body["context"] = parse_action_context(context).model_dump(exclude_none=True)
 
         params: dict[str, str] = {}
         if defer_scan:
@@ -418,13 +424,13 @@ class AsyncSurfaceClient:
     def __init__(
         self,
         api_key: str | None = None,
-        base_url: str = "https://app.tendrl.com/surface/api",
+        base_url: str | None = None,
         max_concurrency: int = 10,
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
     ):
         self.mode = mode
-        self.base_url = base_url.rstrip("/")
+        self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
         self.max_concurrency = max_concurrency
         self.api_key = _resolve_api_key(api_key, required=(mode != "local"))
@@ -549,6 +555,8 @@ class AsyncSurfaceClient:
             request_id: Optional client-generated request ID.
             reject: Threat levels ("Malicious"/"Suspicious") or recommended
                 actions ("Block"/"Review") to reject.
+            context: Optional action-screening context. Fields you omit stay
+                silent; values you pass are validated.
         """
         if isinstance(payload, str):
             body: dict[str, str] = {"payload": payload, "label": label}
@@ -565,11 +573,7 @@ class AsyncSurfaceClient:
                 }
 
         if context is not None:
-            body["context"] = (
-                context.model_dump(exclude_none=True)
-                if isinstance(context, ActionContext)
-                else context
-            )
+            body["context"] = parse_action_context(context).model_dump(exclude_none=True)
 
         params: dict[str, str] = {}
         if defer_scan:

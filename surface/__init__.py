@@ -7,6 +7,8 @@ from .guard import (
     Decision,
     ToolBlocked,
     ToolGuard,
+    context_fields,
+    jsonl_trace,
     tool_call_json,
 )
 from .middleware import ScanMiddleware, scan_request
@@ -65,6 +67,8 @@ __all__ = [
     "Decision",
     "ToolBlocked",
     "tool_call_json",
+    "jsonl_trace",
+    "context_fields",
     "MaliciousFileError",
     "verify_webhook_signature",
     # Errors
