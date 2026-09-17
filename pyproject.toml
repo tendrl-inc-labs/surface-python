@@ -6,14 +6,10 @@ build-backend = "hatchling.build"
 name = "tendrl-surface"
 version = "0.1.0"
 description = "Python SDK for the Surface file scanning API"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "httpx[http2]>=0.24",
     "pydantic>=2.0",
-    # Models annotate with PEP 604 unions ("str | None"). Pydantic evaluates
-    # those at class-creation time, which fails on 3.9 without this backport —
-    # importing the package at all raises TypeError. Required, not optional.
-    "eval_type_backport>=0.2; python_version < '3.10'",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +21,11 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.pyright]
+include = ["surface", "tests"]
+venvPath = "."
+venv = ".venv"
 
 [tool.hatch.build.targets.wheel]
 # Hatchling infers the package directory from the project name. The name is

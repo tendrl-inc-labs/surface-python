@@ -16,7 +16,7 @@ Each line in `SURFACE_TRACE` is one screened call: tool name, Allow/Review/Block
 which of the three context fields were set, and finding reasons. Tool arguments
 are not written.
 
-`pydantic_ai_support.py` needs Python 3.10+ and `pydantic-ai`. It uses
+`pydantic_ai_support.py` needs `pydantic-ai`. It uses
 `TestModel` (no LLM key) and `AsyncToolGuard` in `before_tool_execute`.
 
 Context fields are optional: pass what you have from trusted app state — not
