@@ -7,3 +7,9 @@ dist/
 .pytest_cache/
 .eval_results.json
 *.eval*.json
+.env
+.env.*
+.vscode/
+.idea/
+*.jsonl
+.DS_Store
