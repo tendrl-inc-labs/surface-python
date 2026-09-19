@@ -59,8 +59,10 @@ Pydantic AI (``Hooks.before_tool_execute``; use AsyncToolGuard)::
     @hooks.on.before_tool_execute
     async def surface_guard(ctx, *, call, tool_def, args):
         d = await guard.screen(call.tool_name, args)
-        if d.blocked:       raise ToolFailed(d.reason)    # tool never runs
-        if d.needs_review:  raise ApprovalRequired()      # native HITL
+        if d.blocked:
+            raise ToolFailed(d.reason)
+        if d.needs_review:
+            raise ApprovalRequired()
         return args
 
     agent = Agent("openai:gpt-4o", capabilities=[hooks])
