@@ -362,34 +362,6 @@ class Usage(BaseModel):
     daily_volume: DailyVolume | None = None
 
 
-class ScanProfile(BaseModel):
-    id: str
-    account_id: str
-    name: str
-    is_default: bool
-    allowed_types: str
-    max_file_size: int
-    block_malicious_ip: bool
-    enable_payload_scan: bool = True
-    engine_config: dict | None = Field(default=None, alias="engine_config")
-    webhook_url: str | None = None
-    webhook_api_key: str | None = None
-    created_at: str
-    updated_at: str
-
-
-class APIKey(BaseModel):
-    id: str
-    account_id: str
-    profile_id: str
-    key_id: str
-    key_value: str | None = None
-    label: str
-    last_used_at: str | None = None
-    created_at: str
-    profile_name: str | None = None
-
-
 class ScanHistoryEntry(BaseModel):
     id: str
     account_id: str

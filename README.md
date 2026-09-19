@@ -85,7 +85,7 @@ In `mode="api"` an `AuthenticationError` is raised at construction time if neith
 
 The hosted API URL defaults to production (`https://app.tendrl.com/surface/api`). Override with `base_url=` or `SURFACE_BASE_URL`.
 
-`mode="local"` is exempt: the local scanner daemon is unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). A key is still needed for the hosted calls — `get_usage`, `get_account`, the profile and API-key methods, and `get_scan_history` — which always go to the Surface API regardless of mode.
+`mode="local"` is exempt: the local scanner daemon is unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). A key is still needed for the hosted calls — `get_usage`, `get_account`, and `get_scan_history` — which always go to the Surface API regardless of mode.
 
 ## Scanning Files
 
@@ -300,47 +300,9 @@ print(f"{usage.scans_used}/{usage.max_scans} scans used this period ({usage.scan
 account = client.get_account()
 ```
 
-## Scan Profiles
+## Profiles and API Keys
 
-```python
-profiles = client.list_profiles()
-
-profile = client.create_profile(
-    name="Images Only",
-    allowed_types="jpg,jpeg,png,gif,webp",
-    max_file_size=10485760,
-)
-
-client.update_profile(profile.id, name="Images & PDFs", allowed_types="jpg,jpeg,png,gif,webp,pdf")
-client.delete_profile(profile.id)
-```
-
-### Profile Engine Configuration
-
-Control which engines run and configure per-engine settings via `engine_config`:
-
-```python
-profile = client.create_profile(
-    name="Agentic Intake",
-    allowed_types="json,txt,md",
-    enable_payload_scan=True,
-    engine_config={
-        "prompt_injection": {"enabled": True},
-        "sensitive_data": {"enabled": True, "mask_output": True},
-        "ml": {"threshold": 0.8},
-    },
-)
-```
-
-Built-in profiles are provisioned server-side; see the [scan profiles documentation](https://tendrl.com/docs/surface/scan-profiles/) for what a new account starts with.
-
-## API Keys
-
-```python
-keys = client.list_api_keys()
-new_key = client.create_api_key("Production", profile_id=profile.id)
-client.delete_api_key(key_id)
-```
+The SDK doesn't manage scan profiles or API keys. Each key is bound to a profile, and scans use it automatically, so scanning code never needs to choose one. Create and edit profiles and keys in the Surface dashboard, the [REST API](https://tendrl.com/docs/surface/api/), or the [Surface MCP tools](https://tendrl.com/docs/surface/ai/mcp-server/). See [scan profiles](https://tendrl.com/docs/surface/scan-profiles/) for what each setting does.
 
 ## Scan History
 

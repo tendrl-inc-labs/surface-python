@@ -21,10 +21,8 @@ from .errors import (
 )
 from .models import (
     ActionContext,
-    APIKey,
     DeferredScanResponse,
     ScanHistoryPage,
-    ScanProfile,
     ScanResult,
     Usage,
     parse_action_context,
@@ -347,55 +345,6 @@ class SurfaceClient:
         _raise_for_status(resp)
         return resp.json()
 
-
-    # ------------------------------------------------------------------
-    # Scan profiles
-    # ------------------------------------------------------------------
-
-    def list_profiles(self) -> list[ScanProfile]:
-        resp = self._cloud.get("/account/profiles")
-        _raise_for_status(resp)
-        data = resp.json()
-        items = data.get("profiles", data) if isinstance(data, dict) else data
-        return [ScanProfile.model_validate(p) for p in items]
-
-    def create_profile(self, **kwargs: Any) -> ScanProfile:
-        resp = self._cloud.post("/account/profiles", json=kwargs)
-        _raise_for_status(resp)
-        return ScanProfile.model_validate(resp.json())
-
-    def update_profile(self, profile_id: str, **kwargs: Any) -> ScanProfile:
-        resp = self._cloud.put(f"/account/profiles/{profile_id}", json=kwargs)
-        _raise_for_status(resp)
-        return ScanProfile.model_validate(resp.json())
-
-    def delete_profile(self, profile_id: str) -> None:
-        resp = self._cloud.delete(f"/account/profiles/{profile_id}")
-        _raise_for_status(resp)
-
-    # ------------------------------------------------------------------
-    # API keys
-    # ------------------------------------------------------------------
-
-    def list_api_keys(self) -> list[APIKey]:
-        resp = self._cloud.get("/account/keys")
-        _raise_for_status(resp)
-        data = resp.json()
-        items = data.get("keys", data) if isinstance(data, dict) else data
-        return [APIKey.model_validate(k) for k in items]
-
-    def create_api_key(self, label: str, profile_id: str | None = None) -> APIKey:
-        body: dict[str, str] = {"label": label}
-        if profile_id:
-            body["profile_id"] = profile_id
-        resp = self._cloud.post("/account/keys", json=body)
-        _raise_for_status(resp)
-        return APIKey.model_validate(resp.json())
-
-    def delete_api_key(self, key_id: str) -> None:
-        resp = self._cloud.delete(f"/account/keys/{key_id}")
-        _raise_for_status(resp)
-
     # ------------------------------------------------------------------
     # Scan history
     # ------------------------------------------------------------------
@@ -665,54 +614,6 @@ class AsyncSurfaceClient:
         resp = await self._cloud.get("/account")
         _raise_for_status(resp)
         return resp.json()
-
-    # ------------------------------------------------------------------
-    # Scan profiles
-    # ------------------------------------------------------------------
-
-    async def list_profiles(self) -> list[ScanProfile]:
-        resp = await self._cloud.get("/account/profiles")
-        _raise_for_status(resp)
-        data = resp.json()
-        items = data.get("profiles", data) if isinstance(data, dict) else data
-        return [ScanProfile.model_validate(p) for p in items]
-
-    async def create_profile(self, **kwargs: Any) -> ScanProfile:
-        resp = await self._cloud.post("/account/profiles", json=kwargs)
-        _raise_for_status(resp)
-        return ScanProfile.model_validate(resp.json())
-
-    async def update_profile(self, profile_id: str, **kwargs: Any) -> ScanProfile:
-        resp = await self._cloud.put(f"/account/profiles/{profile_id}", json=kwargs)
-        _raise_for_status(resp)
-        return ScanProfile.model_validate(resp.json())
-
-    async def delete_profile(self, profile_id: str) -> None:
-        resp = await self._cloud.delete(f"/account/profiles/{profile_id}")
-        _raise_for_status(resp)
-
-    # ------------------------------------------------------------------
-    # API keys
-    # ------------------------------------------------------------------
-
-    async def list_api_keys(self) -> list[APIKey]:
-        resp = await self._cloud.get("/account/keys")
-        _raise_for_status(resp)
-        data = resp.json()
-        items = data.get("keys", data) if isinstance(data, dict) else data
-        return [APIKey.model_validate(k) for k in items]
-
-    async def create_api_key(self, label: str, profile_id: str | None = None) -> APIKey:
-        body: dict[str, str] = {"label": label}
-        if profile_id:
-            body["profile_id"] = profile_id
-        resp = await self._cloud.post("/account/keys", json=body)
-        _raise_for_status(resp)
-        return APIKey.model_validate(resp.json())
-
-    async def delete_api_key(self, key_id: str) -> None:
-        resp = await self._cloud.delete(f"/account/keys/{key_id}")
-        _raise_for_status(resp)
 
     # ------------------------------------------------------------------
     # Scan history

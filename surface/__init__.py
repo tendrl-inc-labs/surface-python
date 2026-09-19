@@ -21,7 +21,6 @@ from .errors import (
     ValidationError,
 )
 from .models import (
-    APIKey,
     Account,
     ActionContext,
     AnalysisIndicator,
@@ -46,7 +45,6 @@ from .models import (
     SafetyScore,
     ScanHistoryEntry,
     ScanHistoryPage,
-    ScanProfile,
     ScanResult,
     StaticAnalysisResult,
     TLSHResult,
@@ -83,7 +81,6 @@ __all__ = [
     "scan_request",
     # Models
     "Account",
-    "APIKey",
     "ActionContext",
     "AnalysisIndicator",
     "ArchiveEntry",
@@ -107,7 +104,6 @@ __all__ = [
     "SafetyScore",
     "ScanHistoryEntry",
     "ScanHistoryPage",
-    "ScanProfile",
     "ScanResult",
     "StaticAnalysisResult",
     "TLSHResult",
