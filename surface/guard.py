@@ -21,17 +21,19 @@ Wiring examples
 ---------------
 Plain dispatch (any loop)::
 
-    guard = ToolGuard(client, context=lambda name, args: ActionContext(
-        principal_domains=["acme.io"],
-        allowed_egress=["api.stripe.com"],
-        user_request=session.user_message,
-    ), on_decision=jsonl_trace("/var/log/surface-toolguard.jsonl"))
+    guard = ToolGuard(client)
 
     for call in model_tool_calls:
         d = guard.screen(call.name, call.args)
         if d.blocked:      refuse(d.reason)
         elif d.needs_review: escalate_to_human(call, d)
         else:              run(call)
+
+    # Optional: pass trusted app state, not the tool arguments.
+    guard = ToolGuard(client, context=ActionContext(
+        principal_domains=["acme.io"],
+        user_request=session.user_message,
+    ))
 
 LangChain / LangGraph (wrap the tool's function)::
 

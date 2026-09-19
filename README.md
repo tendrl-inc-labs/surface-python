@@ -160,18 +160,9 @@ Pass `on_decision=jsonl_trace(path)` (or set `SURFACE_TRACE` in the [example age
 Action screening is not automatic — you run it in your agent loop, around tool execution. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire the scan and the verdict check each time. Either call `screen()` and branch, or `wrap()` a tool so it screens before it runs.
 
 ```python
-from surface import SurfaceClient, ToolGuard, ActionContext, ToolBlocked, jsonl_trace
+from surface import SurfaceClient, ToolGuard, ToolBlocked
 
-guard = ToolGuard(
-    SurfaceClient(),
-    # fields you have, from trusted request state, never the tool arguments
-    context=lambda name, args: ActionContext(
-        principal_domains=["acme.io"],
-        allowed_egress=["api.stripe.com", "hooks.slack.com"],
-        user_request=session.user_message,
-    ),
-    on_decision=jsonl_trace("/var/log/surface-toolguard.jsonl"),
-)
+guard = ToolGuard(SurfaceClient())
 
 # Option A — decide yourself
 d = guard.screen(call.name, call.args)
@@ -187,6 +178,22 @@ except ToolBlocked as e:
     log(e.decision.reason, e.decision.findings)   # the offending action + evidence
 ```
 
+Context is optional. Pass the fields you have from trusted app state — never from the tool arguments. A callable is only needed if the values change per call.
+
+```python
+from surface import ActionContext, jsonl_trace
+
+guard = ToolGuard(
+    SurfaceClient(),
+    context=ActionContext(
+        principal_domains=["acme.io"],
+        allowed_egress=["api.stripe.com", "hooks.slack.com"],
+        user_request=session.user_message,
+    ),
+    on_decision=jsonl_trace("/var/log/surface-toolguard.jsonl"),
+)
+```
+
 `AsyncToolGuard` is the awaitable variant. The docstrings in [`surface/guard.py`](surface/guard.py) show wiring for LangChain/LangGraph, the OpenAI Agents SDK, and Pydantic AI; the pattern is the same either way — the host screens, the model never scans itself.
 
 ### Pydantic AI
@@ -198,18 +205,10 @@ from pydantic_ai import Agent, DeferredToolRequests, RunContext, ToolDefinition
 from pydantic_ai.capabilities import Hooks, ValidatedToolArgs
 from pydantic_ai.exceptions import ApprovalRequired, ToolFailed
 from pydantic_ai.messages import ToolCallPart
-from surface import ActionContext, AsyncSurfaceClient, AsyncToolGuard
+from surface import AsyncSurfaceClient, AsyncToolGuard
 
 hooks = Hooks()
-guard = AsyncToolGuard(
-    AsyncSurfaceClient(),
-    # context comes from your trusted request state, never the tool arguments
-    context=lambda name, args: ActionContext(
-        principal_domains=["acme.io"],
-        allowed_egress=["api.stripe.com", "hooks.slack.com"],
-        user_request=session.user_message,
-    ),
-)
+guard = AsyncToolGuard(AsyncSurfaceClient())
 
 @hooks.on.before_tool_execute
 async def surface_guard(
@@ -294,7 +293,7 @@ For application-wide scanning, use the ASGI middleware with FastAPI or Starlette
 ```python
 from surface.middleware import ScanMiddleware
 
-app.add_middleware(ScanMiddleware, client=client, reject=["Malicious"], fail_open=True)
+app.add_middleware(ScanMiddleware, client=client, reject=["Malicious"])
 ```
 
 Flask sync routes are also supported via the same `@scan_request` decorator.
