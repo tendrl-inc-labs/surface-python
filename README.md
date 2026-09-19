@@ -201,23 +201,16 @@ guard = ToolGuard(
 Pydantic AI's loop is async, so use `AsyncToolGuard` and screen in a `before_tool_execute` hook. That covers every tool on the agent, including MCP toolsets. Map **Block** to `ToolFailed` (the model sees the refusal; the tool never runs) and **Review** to `ApprovalRequired` (native human-in-the-loop). Do not `wrap()` the tool function: `ToolBlocked` aborts the whole run, and Pydantic AI inspects signatures to build tool schemas.
 
 ```python
-from pydantic_ai import Agent, DeferredToolRequests, RunContext, ToolDefinition
-from pydantic_ai.capabilities import Hooks, ValidatedToolArgs
+from pydantic_ai import Agent
+from pydantic_ai.capabilities import Hooks
 from pydantic_ai.exceptions import ApprovalRequired, ToolFailed
-from pydantic_ai.messages import ToolCallPart
 from surface import AsyncSurfaceClient, AsyncToolGuard
 
 hooks = Hooks()
 guard = AsyncToolGuard(AsyncSurfaceClient())
 
 @hooks.on.before_tool_execute
-async def surface_guard(
-    ctx: RunContext,
-    *,
-    call: ToolCallPart,
-    tool_def: ToolDefinition,
-    args: ValidatedToolArgs,
-) -> ValidatedToolArgs:
+async def surface_guard(ctx, *, call, tool_def, args):
     d = await guard.screen(call.tool_name, args)
     if d.blocked:
         raise ToolFailed(d.reason)
@@ -225,11 +218,7 @@ async def surface_guard(
         raise ApprovalRequired()
     return args
 
-agent = Agent(
-    "openai:gpt-4o",
-    capabilities=[hooks],
-    output_type=[str, DeferredToolRequests],
-)
+agent = Agent("openai:gpt-4o", capabilities=[hooks])
 ```
 
 To screen one toolset only (a `FunctionToolset` or an MCP server), subclass `WrapperToolset` and call `guard.screen(name, tool_args)` in `call_tool` before `super().call_tool(...)`, raising the same two exceptions.
