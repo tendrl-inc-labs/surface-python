@@ -20,6 +20,7 @@ from .errors import (
     ValidationError,
 )
 from .models import (
+    STRICTNESS_LEVELS,
     ActionContext,
     DeferredScanResponse,
     ScanHistoryPage,
@@ -50,6 +51,15 @@ def _resolve_api_key(api_key: str | None, *, required: bool = True) -> str | Non
             "No API key provided. Pass api_key or set the SURFACE_KEY environment variable."
         )
     return resolved
+
+
+def _context_body(context: ActionContext | dict | None, strictness: str | None) -> dict | None:
+    """The request's context: the caller's, with the client's strictness filling a gap."""
+    parsed = parse_action_context(context) if context is not None else None
+    body = parsed.model_dump(exclude_none=True) if isinstance(parsed, ActionContext) else {}
+    if strictness and "strictness" not in body:
+        body["strictness"] = strictness
+    return body or None
 
 
 def _prepare_file(file: FileInput) -> tuple[str, bytes]:
@@ -110,7 +120,13 @@ class SurfaceClient:
         base_url: str | None = None,
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
+        strictness: str | None = None,
     ):
+        if strictness is not None and strictness not in STRICTNESS_LEVELS:
+            raise ValueError(f"strictness must be one of {', '.join(STRICTNESS_LEVELS)}")
+        # Default ActionContext.strictness for scan_payload; a context that
+        # sets its own wins. None leaves the scanner default (balanced).
+        self.strictness = strictness
         self.mode = mode
         self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
@@ -274,10 +290,9 @@ class SurfaceClient:
                     "label": label,
                 }
 
-        if context is not None:
-            parsed = parse_action_context(context)
-            if isinstance(parsed, ActionContext):
-                body["context"] = parsed.model_dump(exclude_none=True)
+        ctx_body = _context_body(context, self.strictness)
+        if ctx_body:
+            body["context"] = ctx_body
 
         params: dict[str, str] = {}
         if defer_scan:
@@ -379,7 +394,13 @@ class AsyncSurfaceClient:
         max_concurrency: int = 10,
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
+        strictness: str | None = None,
     ):
+        if strictness is not None and strictness not in STRICTNESS_LEVELS:
+            raise ValueError(f"strictness must be one of {', '.join(STRICTNESS_LEVELS)}")
+        # Default ActionContext.strictness for scan_payload; a context that
+        # sets its own wins. None leaves the scanner default (balanced).
+        self.strictness = strictness
         self.mode = mode
         self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
@@ -523,10 +544,9 @@ class AsyncSurfaceClient:
                     "label": label,
                 }
 
-        if context is not None:
-            parsed = parse_action_context(context)
-            if isinstance(parsed, ActionContext):
-                body["context"] = parsed.model_dump(exclude_none=True)
+        ctx_body = _context_body(context, self.strictness)
+        if ctx_body:
+            body["context"] = ctx_body
 
         params: dict[str, str] = {}
         if defer_scan:

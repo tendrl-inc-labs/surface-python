@@ -137,3 +137,62 @@ def test_pydantic_ai_review_defers_for_human():
     assert isinstance(result.output, DeferredToolRequests)
     assert result.output.approvals
     assert result.output.approvals[0].tool_name == "transfer_funds"
+
+
+# ---- surface.pydantic_ai.surface_hooks --------------------------------------
+
+from surface.pydantic_ai import prompt_text, surface_hooks  # noqa: E402
+
+
+class RecordingFake(AsyncFake):
+    async def scan_payload(self, payload, label="p", *, context=None):
+        self.calls.append((payload, label, context))
+        return self._r
+
+
+def _hooked_agent(guard, ran):
+    agent = Agent(TestModel(), capabilities=[surface_hooks(guard)],
+                  output_type=[str, DeferredToolRequests])
+
+    @agent.tool_plain
+    def send_email(to: str, body: str) -> str:
+        ran.append(to)
+        return f"sent to {to}"
+
+    return agent
+
+
+def test_surface_hooks_sends_run_prompt_as_user_request():
+    fake, ran = RecordingFake("Allow"), []
+    agent = _hooked_agent(AsyncToolGuard(fake), ran)
+    agent.run_sync("Email wen@acme.io the weekly summary")
+    assert ran, "Allow must let the tool run"
+    assert fake.calls[0][2].user_request == "Email wen@acme.io the weekly summary"
+
+
+def test_surface_hooks_keeps_an_explicit_user_request():
+    fake, ran = RecordingFake("Allow"), []
+    guard = AsyncToolGuard(fake, context=ActionContext(user_request="the user's own words"))
+    _hooked_agent(guard, ran).run_sync("prompt built from a retrieved document")
+    assert fake.calls[0][2].user_request == "the user's own words"
+
+
+def test_surface_hooks_defers_review_and_fails_block():
+    ran = []
+    out = _hooked_agent(AsyncToolGuard(RecordingFake("Review")), ran).run_sync("x")
+    assert isinstance(out.output, DeferredToolRequests) and ran == []
+    ran = []
+    _hooked_agent(AsyncToolGuard(RecordingFake("Block", "exfil")), ran).run_sync("x")
+    assert ran == []
+
+
+def test_surface_hooks_respects_on_review_allow():
+    ran = []
+    _hooked_agent(AsyncToolGuard(RecordingFake("Review"), on_review="allow"), ran).run_sync("x")
+    assert ran
+
+
+def test_prompt_text_joins_string_parts():
+    assert prompt_text("hi") == "hi"
+    assert prompt_text(["a", object(), "b"]) == "a\nb"
+    assert prompt_text(None) is None

@@ -17,7 +17,8 @@ which of the three context fields were set, and finding reasons. Tool arguments
 are not written.
 
 `pydantic_ai_support.py` needs `pydantic-ai`. It uses
-`TestModel` (no LLM key) and `AsyncToolGuard` in `before_tool_execute`.
+`TestModel` (no LLM key) and `surface_hooks(AsyncToolGuard(...))`, which sends the
+run's prompt as `user_request` and defers Review verdicts for approval.
 
 Context fields are optional: pass what you have from trusted app state — not
 from the tool arguments. Values that are passed are validated. Without
