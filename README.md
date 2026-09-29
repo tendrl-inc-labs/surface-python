@@ -140,16 +140,49 @@ result = client.scan_payload(
 # A plain dict works too: context={"principal_domains": ["acme.io"]}
 ```
 
+**Strictness**
+
+`strictness` sets how readily a judgment call turns into a verdict:
+
+- **`relaxed`**: stop only what's certainly malicious.
+- **`balanced`** (the default): stop what's certainly malicious, and ask before risky or irreversible actions.
+- **`strict`**: ask or stop on anything that needs judgment, including mail to personal addresses and outside recipients.
+
+Set it once on the guard (`ToolGuard(client, strictness="strict")`) or the client (`SurfaceClient(strictness="strict")`); a context that sets its own wins. What is certainly malicious (wiping the system, sending credentials out, customer data to a personal mailbox) Blocks at every level. The table is the reference:
+
+| | `relaxed` | `balanced` (default) | `strict` |
+|---|---|---|---|
+| Plain email to a Gmail/Outlook address | Allow | Allow | Block |
+| Document to a free-mail address nobody named | Allow | Review | Block |
+| Sensitive or bulk data (customers, directory, payroll, exports) to a free-mail address | Review | Block | Block |
+| Plain email to an outside company | Allow | Allow | Review |
+| Document to an outside recipient nobody named | Allow | Review | Review |
+| Email to an outside or free-mail recipient when `user_request` asked to contact no one | Allow | Review | Review (or Block, free-mail) |
+| A live credential (Stripe/AWS/GitHub key, private key) to an outside recipient | Block | Block | Block |
+| Delete data, drop a database, force-push, grant admin, share publicly: **requested** in `user_request`, or no `user_request` to judge by | Review | Review | Block |
+| The same, when `user_request` asks for something else | Block | Block | Block |
+| Crypto payout, gift cards, forwarding mail to a personal address, MFA or audit logging off: **requested** | Review | Review | Block |
+| The same, not requested or no `user_request` | Block | Block | Block |
+| Reading a project `.env` | Allow | Review (Allow if the request asks about it) | Block |
+| Official installer piped to a shell (`https://sh.rustup.rs \| sh`) | Allow | Allow | Review |
+| Script from a shared or unknown host piped to a shell | Allow | Review | Review |
+
+```python
+ActionContext(principal_domains=["acme.io"], user_request=user_message, strictness="strict")
+```
+
+The outside-company rows need `principal_domains`, since without it nothing counts as outside. A request holds a risky action for Review rather than refusing it outright: Review means a person confirms before the agent acts, and a request can also be where a direct injection arrives. Wiping the system itself, sending credentials out, and sensitive data to a personal mailbox Block whoever asked. Wording in a message body is not treated as data: "here is your password reset link" to a Gmail customer passes, while an actual key in the body does not. `relaxed` skips the request-fit check, so it won't catch an agent that was talked into emailing a stranger by a poisoned page or document. Omit `strictness` and you get `balanced`, so an agent with no configuration isn't stopped while it does routine work. A recipient or domain named in `user_request` clears the Review cases, but sensitive data going to a personal mailbox is blocked even when the request names it, because the request is where a direct injection arrives.
+
 **Use cases**
 
-- **Data egress** — an email or upload leaving `principal_domains` (or to a free-mail address) is flagged; a recipient the user named in `user_request` is cleared. With `allowed_egress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
+- **Data egress** — a document or data leaving `principal_domains`, or sensitive data to a free-mail address, is flagged (see Strictness for exactly when); a recipient the user named in `user_request` is cleared. With `allowed_egress` set, an HTTP POST of data to a host on neither list is flagged for review, so a Stripe or Slack call passes while a POST to an unknown endpoint is caught; a bare-IP destination or a secret in the body is flagged even without it.
 - **Dangerous on its face** — a crypto-address payout, a gift-card purchase that returns the codes, `rm -rf` of a data directory, or an admin grant is flagged with no context needed.
 - **Task fit** — an action unrelated to `user_request` (a refund during "summarize my tickets") is surfaced.
 
 **Optional, validated if present**
 
 - Build `context` from your **trusted application state** — your configured domains, your known integration hosts, the user's message from your own UI. **Never** populate it from the payload being scanned; that would let an attacker vouch for their own request.
-- Every field is optional on both `scan_payload` and `ToolGuard` / `AsyncToolGuard`. Pass only what you have. A field you omit stays silent: outside-org email will not Review without domains, undeclared hosts will not Review without egress, task-fit will not Review without the request. Without any context, only face-dangerous actions flag.
+- Every field is optional on both `scan_payload` and `ToolGuard` / `AsyncToolGuard`. Pass only what you have. A field you omit stays silent: outside-org email will not Review without domains, undeclared hosts will not Review without egress, task-fit will not Review without the request. Without any context, Surface still Blocks what is certainly malicious, and holds irreversible actions (deleting data, granting admin, sharing publicly) for Review, since it can't see whether the user asked for them. Pass `user_request` and a requested action is held for confirmation while an unrequested one Blocks.
 - Values that *are* passed are validated (a domain list must be a list of strings, not a single string).
 - Only what you put in `context` is sent with the scan (for hosted scans, to the API). Keep `user_request` to the instruction itself.
 
@@ -159,24 +192,30 @@ Pass `on_decision=jsonl_trace(path)` (or set `SURFACE_TRACE` in the [example age
 
 Action screening is not automatic — you run it in your agent loop, around tool execution. `ToolGuard` packages the propose → scan → branch pattern so you don't hand-wire the scan and the verdict check each time. Either call `screen()` and branch, or `wrap()` a tool so it screens before it runs.
 
+The three verdicts mean: **Allow**, run it. **Review**, a person should confirm it first. **Block**, don't run it.
+
 ```python
-from surface import SurfaceClient, ToolGuard, ToolBlocked
+from surface import SurfaceClient, ToolGuard, ToolBlocked, ToolNeedsReview
 
 guard = ToolGuard(SurfaceClient())
 
 # Option A — decide yourself
 d = guard.screen(call.name, call.args)
 if d.blocked:        refuse(d.reason)
-elif d.needs_review: escalate_to_human(call, d)
+elif d.needs_review: ask_the_user(call, d)
 else:                run(call)
 
-# Option B — wrap the tool; it raises ToolBlocked instead of running on Block
+# Option B — wrap the tool. It won't run on Block or Review.
 safe_transfer = guard.wrap(transfer_funds)
 try:
     safe_transfer(to="acct_…", amount=4800)
+except ToolNeedsReview as e:
+    ask_the_user(e.decision)                      # confirm, then call transfer_funds yourself
 except ToolBlocked as e:
     log(e.decision.reason, e.decision.findings)   # the offending action + evidence
 ```
+
+`ToolNeedsReview` is a subclass of `ToolBlocked`, so a handler that only catches `ToolBlocked` still stops the call. To change what a wrapped tool does on Review, pass `on_review`: `"allow"` runs it, and a function gets the decision and returns `True` to run it (ask the user there). `block_on_review=True/False` still works and means `"hold"`/`"allow"`.
 
 Context is optional. Pass the fields you have from trusted app state — never from the tool arguments. A callable is only needed if the values change per call.
 
@@ -198,30 +237,24 @@ guard = ToolGuard(
 
 ### Pydantic AI
 
-Pydantic AI's loop is async, so use `AsyncToolGuard` and screen in a `before_tool_execute` hook. That covers every tool on the agent, including MCP toolsets. Map **Block** to `ToolFailed` (the model sees the refusal; the tool never runs) and **Review** to `ApprovalRequired` (native human-in-the-loop). Do not `wrap()` the tool function: `ToolBlocked` aborts the whole run, and Pydantic AI inspects signatures to build tool schemas.
+`surface_hooks` screens every tool call on the agent, MCP toolsets included, in one line. **Block** fails the call back to the model with the reason. **Review** defers it for approval (Pydantic AI's `ApprovalRequired`), so the run ends with `DeferredToolRequests` for your app to show the user; once approved, the call runs without a second scan. The run's prompt is sent as `user_request`, which lets Surface tell an action the user asked for ("delete my drafts") from one that came from a document or web page.
 
 ```python
-from pydantic_ai import Agent
-from pydantic_ai.capabilities import Hooks
-from pydantic_ai.exceptions import ApprovalRequired, ToolFailed
+from pydantic_ai import Agent, DeferredToolRequests
 from surface import AsyncSurfaceClient, AsyncToolGuard
+from surface.pydantic_ai import surface_hooks
 
-hooks = Hooks()
-guard = AsyncToolGuard(AsyncSurfaceClient())
-
-@hooks.on.before_tool_execute
-async def surface_guard(ctx, *, call, tool_def, args):
-    d = await guard.screen(call.tool_name, args)
-    if d.blocked:
-        raise ToolFailed(d.reason)
-    if d.needs_review:
-        raise ApprovalRequired()
-    return args
-
-agent = Agent("openai:gpt-4o", capabilities=[hooks])
+guard = AsyncToolGuard(AsyncSurfaceClient())          # strictness="strict" for more friction
+agent = Agent(
+    "openai:gpt-4o",
+    capabilities=[surface_hooks(guard)],
+    output_type=[str, DeferredToolRequests],
+)
 ```
 
-To screen one toolset only (a `FunctionToolset` or an MCP server), subclass `WrapperToolset` and call `guard.screen(name, tool_args)` in `call_tool` before `super().call_tool(...)`, raising the same two exceptions.
+If your app builds the prompt from untrusted content (retrieved documents, emails), set `user_request` in the guard's context to the user's own words instead; the context wins over the prompt. Do not `wrap()` a Pydantic AI tool function: `ToolBlocked` aborts the whole run, and Pydantic AI inspects signatures to build tool schemas.
+
+To screen one toolset only (a `FunctionToolset` or an MCP server), subclass `WrapperToolset` and call `guard.screen(name, tool_args, user_request=...)` in `call_tool` before `super().call_tool(...)`, raising `ToolFailed` on Block and `ApprovalRequired` on Review.
 
 ## Agentic Security
 

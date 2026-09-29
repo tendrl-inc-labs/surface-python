@@ -8,6 +8,7 @@ from surface import (
     AsyncToolGuard,
     ToolBlocked,
     ToolGuard,
+    ToolNeedsReview,
     jsonl_trace,
     tool_call_json,
 )
@@ -164,13 +165,82 @@ def test_wrap_blocks_and_does_not_run():
     assert ei.value.decision.findings[0]["toolName"] == "transfer"
 
 
-def test_review_runs_unless_configured_to_block():
+def test_review_is_held_by_default():
+    # Review means "a person should confirm this", so the simplest integration
+    # must not run it. ToolNeedsReview is a ToolBlocked, so older handlers
+    # that catch ToolBlocked still stop it.
+    ran = []
+
+    def t(**kw):
+        ran.append(kw)
+        return "ok"
+
+    with pytest.raises(ToolNeedsReview) as ei:
+        ToolGuard(FakeClient("Review", reason="needs a look"), context=CTX).wrap(t)(x=1)
+    assert isinstance(ei.value, ToolBlocked)
+    assert ei.value.decision.needs_review
+    assert ran == []
+
+
+def test_on_review_allow_and_callable():
     def t(**kw):
         return "ok"
 
-    assert ToolGuard(FakeClient("Review"), context=CTX).wrap(t)(x=1) == "ok"
+    assert ToolGuard(FakeClient("Review"), context=CTX, on_review="allow").wrap(t)(x=1) == "ok"
+
+    seen = []
+
+    def ask(d):
+        seen.append(d.action)
+        return True
+
+    assert ToolGuard(FakeClient("Review"), context=CTX, on_review=ask).wrap(t)(x=1) == "ok"
+    assert seen == ["Review"]
+    with pytest.raises(ToolNeedsReview):
+        ToolGuard(FakeClient("Review"), context=CTX, on_review=lambda d: False).wrap(t)(x=1)
+    # on_review never runs a Block.
+    with pytest.raises(ToolBlocked) as ei:
+        ToolGuard(FakeClient("Block"), context=CTX, on_review="allow").wrap(t)(x=1)
+    assert not isinstance(ei.value, ToolNeedsReview)
+
+
+def test_block_on_review_still_works():
+    def t(**kw):
+        return "ok"
+
+    assert ToolGuard(FakeClient("Review"), context=CTX, block_on_review=False).wrap(t)(x=1) == "ok"
     with pytest.raises(ToolBlocked):
         ToolGuard(FakeClient("Review"), context=CTX, block_on_review=True).wrap(t)(x=1)
+
+
+def test_invalid_guard_options_rejected():
+    with pytest.raises(ValueError):
+        ToolGuard(FakeClient("Allow"), strictness="stirct")
+    with pytest.raises(ValueError):
+        ToolGuard(FakeClient("Allow"), on_review="block")
+
+
+def test_guard_strictness_fills_context_unless_set():
+    fake = FakeClient("Allow")
+    ToolGuard(fake, strictness="strict").screen("t", {})
+    assert fake.calls[-1][2].strictness == "strict"
+    ToolGuard(fake, context=CTX, strictness="strict").screen("t", {})
+    ctx = fake.calls[-1][2]
+    assert (ctx.strictness, ctx.user_request) == ("strict", "pay the vendor")
+    ToolGuard(fake, context=ActionContext(strictness="relaxed"), strictness="strict").screen("t", {})
+    assert fake.calls[-1][2].strictness == "relaxed"
+    d = ToolGuard(fake, strictness="strict").screen("t", {})
+    assert d.strictness == "strict"
+
+
+def test_screen_user_request_fills_only_a_missing_request():
+    fake = FakeClient("Allow")
+    ToolGuard(fake).screen("t", {}, user_request="delete my drafts")
+    assert fake.calls[-1][2].user_request == "delete my drafts"
+    ToolGuard(fake, context=CTX).screen("t", {}, user_request="something else")
+    assert fake.calls[-1][2].user_request == "pay the vendor"
+    ToolGuard(fake).screen("t", {})
+    assert fake.calls[-1][2] is None
 
 
 def test_async_guard_blocks_and_allows():
@@ -196,3 +266,25 @@ def test_async_guard_blocks_and_allows():
 
     assert asyncio.run(run_blocked()) == "blocked"
     assert asyncio.run(allowed(x=1)) == "ran"
+
+
+def test_async_review_held_and_async_policy():
+    class AsyncFake:
+        def __init__(self, action):
+            self._r = _result(action)
+
+        async def scan_payload(self, payload, label="p", *, context=None):
+            return self._r
+
+    async def t(**kw):
+        return "ok"
+
+    async def ask(d):
+        return True
+
+    async def run():
+        with pytest.raises(ToolNeedsReview):
+            await AsyncToolGuard(AsyncFake("Review")).wrap(t)(x=1)
+        assert await AsyncToolGuard(AsyncFake("Review"), on_review=ask).wrap(t)(x=1) == "ok"
+
+    asyncio.run(run())

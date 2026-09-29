@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Scan response models (camelCase JSON keys)
 # ---------------------------------------------------------------------------
 
+# Accepted ActionContext.strictness values.
+STRICTNESS_LEVELS = ("relaxed", "balanced", "strict")
+
+
 class ActionContext(BaseModel):
     """Caller-supplied context for action screening of tool-call payloads.
 
@@ -18,7 +22,8 @@ class ActionContext(BaseModel):
     content being scanned.
 
     Every field is optional. Omit context, or omit a field, and that check
-    stays silent (only face-dangerous actions still flag). Values that *are*
+    stays silent (what is certainly malicious still Blocks, and irreversible
+    actions are held for Review). Values that *are*
     passed are validated (a domain list must be a list of strings, not a
     single string). See the "Action Screening Context" README section.
     """
@@ -26,6 +31,10 @@ class ActionContext(BaseModel):
     principal_domains: list[str] | None = None
     allowed_egress: list[str] | None = None
     user_request: str | None = None
+    # How readily a judgment call becomes a verdict: "relaxed", "balanced"
+    # (the scanner's default when omitted) or "strict". Face-dangerous actions
+    # Block at every level.
+    strictness: str | None = None
 
     @field_validator("principal_domains", "allowed_egress", mode="before")
     @classmethod
@@ -46,6 +55,15 @@ class ActionContext(BaseModel):
             return None
         if not isinstance(v, str):
             raise ValueError("must be a string")
+        return v
+
+    @field_validator("strictness", mode="before")
+    @classmethod
+    def _strictness(cls, v):
+        if v is None:
+            return None
+        if v not in STRICTNESS_LEVELS:
+            raise ValueError(f"must be one of {', '.join(STRICTNESS_LEVELS)}")
         return v
 
 

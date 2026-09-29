@@ -124,3 +124,45 @@ def test_context_flips_verdict_through_sdk():
     without = _client(handler).scan_payload(payload)
     assert with_ctx.safety_score.recommended_action == "Review"
     assert without.safety_score.recommended_action == "Allow"
+
+
+def test_strictness_levels_validated():
+    from surface import ActionContext
+
+    for level in ("relaxed", "balanced", "strict"):
+        assert ActionContext(strictness=level).strictness == level
+    assert ActionContext().strictness is None
+    for bad in ("Strict", "stirct", "high", 1):
+        with pytest.raises(ValueError):
+            ActionContext(strictness=bad)
+
+
+def test_strictness_sent_in_payload_context():
+    from surface import ActionContext
+
+    ctx = ActionContext(principal_domains=["acme.io"], strictness="strict")
+    assert ctx.model_dump(exclude_none=True) == {
+        "principal_domains": ["acme.io"],
+        "strictness": "strict",
+    }
+
+
+def test_client_strictness_default():
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content).get("context"))
+        return httpx.Response(200, json=CLEAN)
+
+    c = SurfaceClient(api_key="sfk_test", strictness="strict")
+    c._client = httpx.Client(base_url=c.base_url, transport=httpx.MockTransport(handler))
+    c.scan_payload("{}", "a.json")
+    c.scan_payload("{}", "b.json", context={"principal_domains": ["acme.io"]})
+    c.scan_payload("{}", "c.json", context={"strictness": "relaxed"})
+    assert seen == [
+        {"strictness": "strict"},
+        {"principal_domains": ["acme.io"], "strictness": "strict"},
+        {"strictness": "relaxed"},
+    ]
+    with pytest.raises(ValueError):
+        SurfaceClient(api_key="sfk_test", strictness="high")

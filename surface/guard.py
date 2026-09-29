@@ -11,11 +11,17 @@ decision to branch on yourself. Context (`principal_domains`, `allowed_egress`,
 `user_request`) comes from *your* trusted request state, never from the tool
 arguments — pass a callable if it varies per call.
 
+Strictness (``strictness="relaxed" | "balanced" | "strict"``, default
+balanced) sets how readily a judgment call becomes a verdict: balanced lets
+routine work through (a support reply to a Gmail customer, an official
+installer) and Blocks what is dangerous on its face or plainly exfiltration.
+
 Context fields are optional: pass only what you have from trusted request
 state. A field that is omitted stays silent (outside-org email needs
 ``principal_domains``, undeclared hosts need ``allowed_egress``, task-fit
 needs ``user_request``). Values that *are* passed are validated. Without
-any context, only face-dangerous actions flag.
+any context, what is certainly malicious Blocks and irreversible actions
+(deleting data, granting admin) are held for Review.
 
 Wiring examples
 ---------------
@@ -49,39 +55,34 @@ OpenAI Agents SDK (a tool guardrail / on_tool_start hook)::
         return GuardrailFunctionOutput(output_info=d.reason,
                                        tripwire_triggered=d.blocked)
 
-Pydantic AI (``Hooks.before_tool_execute``; use AsyncToolGuard)::
+Pydantic AI (``surface.pydantic_ai.surface_hooks``; use AsyncToolGuard)::
 
-    from pydantic_ai.capabilities import Hooks
-    from pydantic_ai.exceptions import ApprovalRequired, ToolFailed
+    from surface.pydantic_ai import surface_hooks
 
-    hooks = Hooks()
-
-    @hooks.on.before_tool_execute
-    async def surface_guard(ctx, *, call, tool_def, args):
-        d = await guard.screen(call.tool_name, args)
-        if d.blocked:
-            raise ToolFailed(d.reason)
-        if d.needs_review:
-            raise ApprovalRequired()
-        return args
-
-    agent = Agent("openai:gpt-4o", capabilities=[hooks])
+    agent = Agent("openai:gpt-4o", capabilities=[surface_hooks(guard)],
+                  output_type=[str, DeferredToolRequests])
+    # Block fails the tool call back to the model; Review defers it for
+    # approval (ApprovalRequired). The run's prompt is sent as user_request.
     # Do not wrap() the tool function: ToolBlocked aborts the whole run,
     # and Pydantic AI inspects signatures to build tool schemas.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Union
 
-from .models import ActionContext, ScanResult, parse_action_context
+from .models import STRICTNESS_LEVELS, ActionContext, ScanResult, parse_action_context
 
 # A context source: a fixed context, or a callable computing one per tool call.
 ContextSource = Union[ActionContext, dict, Callable[[str, Any], Any], None]
 DecisionHook = Callable[["Decision"], None]
+# What a wrapped tool does on Review: "hold" (raise ToolNeedsReview), "allow"
+# (run it), or a callable that gets the Decision and returns True to run it.
+ReviewPolicy = Union[str, Callable[["Decision"], Any]]
 
 
 @dataclass
@@ -94,6 +95,7 @@ class Decision:
     result: ScanResult | None = None  # the full scan result
     tool: str = ""
     context_fields: dict[str, bool] = field(default_factory=dict)
+    strictness: str = "balanced"  # the level the call was screened at
 
     @property
     def allowed(self) -> bool:
@@ -120,6 +122,15 @@ class ToolBlocked(Exception):
         super().__init__(
             f"Surface stopped a tool call ({decision.action}): {decision.reason}"
         )
+
+
+class ToolNeedsReview(ToolBlocked):
+    """Raised by a wrapped tool on a Review verdict: a person should confirm it.
+
+    A subclass of :class:`ToolBlocked`, so code that already catches that
+    stays safe. Catch this one first to ask the user and retry, e.g. with
+    ``guard.approved()``.
+    """
 
 
 def tool_call_json(name: str, args: Any) -> str:
@@ -166,6 +177,7 @@ def jsonl_trace(path: str | os.PathLike) -> DecisionHook:
             "reason": d.reason,
             "context_present": d.context_present,
             "context_fields": d.context_fields,
+            "strictness": d.strictness,
             "findings": [
                 (f.get("reason") if isinstance(f, dict) else str(f))
                 for f in (d.findings or [])
@@ -180,14 +192,15 @@ def jsonl_trace(path: str | os.PathLike) -> DecisionHook:
 def _decision(res: Any, tool: str = "", ctx: Any = None) -> Decision:
     ss = getattr(res, "safety_score", None)
     fields = context_fields(ctx)
+    level = getattr(ctx, "strictness", None) or "balanced"
     if ss is None:
         # A deferred scan carries no verdict yet; it cannot clear a live action.
         return Decision(
-            "Review", "scan deferred; no verdict yet", [], res, tool, fields
+            "Review", "scan deferred; no verdict yet", [], res, tool, fields, level
         )
     findings = (getattr(res, "action_screen", None) or {}).get("findings") or []
     reason = ss.primary_threat or (findings[0].get("reason") if findings else "")
-    return Decision(ss.recommended_action, reason or "", findings, res, tool, fields)
+    return Decision(ss.recommended_action, reason or "", findings, res, tool, fields, level)
 
 
 def _resolve_args(a: tuple, kw: dict) -> Any:
@@ -206,6 +219,16 @@ class ToolGuard:
     call ``screen`` and branch yourself, or ``wrap`` a tool so it screens
     before it runs. ``context`` is optional; fields you pass are validated
     and must come from trusted app state — not from the tool arguments.
+
+    ``strictness`` ("relaxed", "balanced", "strict") applies to every call
+    unless the context sets its own; omitted, the scanner uses balanced.
+
+    ``on_review`` decides what a *wrapped* tool does on Review, which means
+    "a person should confirm this": ``"hold"`` (the default) raises
+    :class:`ToolNeedsReview` instead of running it, ``"allow"`` runs it, and a
+    callable gets the :class:`Decision` and returns True to run it — ask the
+    user there. ``block_on_review`` is the older spelling: True is "hold",
+    False is "allow".
     """
 
     def __init__(
@@ -213,30 +236,55 @@ class ToolGuard:
         client: Any,
         context: ContextSource = None,
         *,
-        block_on_review: bool = False,
+        strictness: str | None = None,
+        on_review: ReviewPolicy = "hold",
+        block_on_review: bool | None = None,
         on_decision: DecisionHook | None = None,
     ) -> None:
+        if strictness is not None and strictness not in STRICTNESS_LEVELS:
+            raise ValueError(f"strictness must be one of {', '.join(STRICTNESS_LEVELS)}")
+        if block_on_review is not None:
+            on_review = "hold" if block_on_review else "allow"
+        if not callable(on_review) and on_review not in ("hold", "allow"):
+            raise ValueError('on_review must be "hold", "allow", or a callable')
         self._client = client
         self._context = context
-        self._block_on_review = block_on_review
+        self._strictness = strictness
+        self._on_review = on_review
         self._on_decision = on_decision
 
-    def _ctx(self, name: str, args: Any):
+    def _ctx(self, name: str, args: Any, user_request: str | None = None):
         c = self._context
         raw = c(name, args) if callable(c) else c
-        return parse_action_context(raw)
+        ctx = parse_action_context(raw)
+        # Guard-level defaults fill only what the context leaves empty.
+        updates: dict[str, Any] = {}
+        if self._strictness and (ctx is None or ctx.strictness is None):
+            updates["strictness"] = self._strictness
+        if user_request and (ctx is None or not ctx.user_request):
+            updates["user_request"] = str(user_request)
+        if updates:
+            ctx = (ctx or ActionContext()).model_copy(update=updates)
+        return ctx
 
-    def _stop(self, d: Decision) -> bool:
-        return d.blocked or (self._block_on_review and d.needs_review)
+    def _review_runs(self, d: Decision) -> Any:
+        """Whether a Review verdict lets the tool run (may be awaitable)."""
+        if callable(self._on_review):
+            return self._on_review(d)
+        return self._on_review == "allow"
 
     def _emit(self, d: Decision) -> Decision:
         if self._on_decision is not None:
             self._on_decision(d)
         return d
 
-    def screen(self, name: str, args: Any) -> Decision:
-        """Scan a proposed tool call and return the :class:`Decision`."""
-        ctx = self._ctx(name, args)
+    def screen(self, name: str, args: Any, *, user_request: str | None = None) -> Decision:
+        """Scan a proposed tool call and return the :class:`Decision`.
+
+        ``user_request`` fills the context's request when it has none — the
+        framework hooks pass the run's prompt here.
+        """
+        ctx = self._ctx(name, args, user_request)
         res = self._client.scan_payload(
             tool_call_json(name, args),
             f"{name}.toolcall.json",
@@ -247,15 +295,17 @@ class ToolGuard:
     def wrap(self, fn: Callable[..., Any], name: str | None = None) -> Callable[..., Any]:
         """Wrap a tool function so it screens its own call before executing.
 
-        On Block (or Review when ``block_on_review``) it raises
-        :class:`ToolBlocked` instead of running the tool.
+        On Block it raises :class:`ToolBlocked`; on Review it follows
+        ``on_review`` — by default raising :class:`ToolNeedsReview`.
         """
         tool_name = name or getattr(fn, "__name__", "tool")
 
         def wrapped(*a: Any, **kw: Any) -> Any:
             decision = self.screen(tool_name, _resolve_args(a, kw))
-            if self._stop(decision):
+            if decision.blocked:
                 raise ToolBlocked(decision)
+            if decision.needs_review and not self._review_runs(decision):
+                raise ToolNeedsReview(decision)
             return fn(*a, **kw)
 
         wrapped.__name__ = tool_name
@@ -265,10 +315,22 @@ class ToolGuard:
 
 
 class AsyncToolGuard(ToolGuard):
-    """Async variant: ``screen`` and wrapped tools are awaitable."""
+    """Async variant: ``screen`` and wrapped tools are awaitable.
 
-    async def screen(self, name: str, args: Any) -> Decision:  # type: ignore[override]
-        ctx = self._ctx(name, args)
+    An ``on_review`` callable may be sync or async.
+    """
+
+    async def review_runs(self, d: Decision) -> bool:
+        """Whether a Review verdict lets the tool run, awaiting the policy if needed."""
+        out = self._review_runs(d)
+        if inspect.isawaitable(out):
+            out = await out
+        return bool(out)
+
+    async def screen(  # type: ignore[override]
+        self, name: str, args: Any, *, user_request: str | None = None
+    ) -> Decision:
+        ctx = self._ctx(name, args, user_request)
         res = await self._client.scan_payload(
             tool_call_json(name, args),
             f"{name}.toolcall.json",
@@ -283,8 +345,10 @@ class AsyncToolGuard(ToolGuard):
 
         async def wrapped(*a: Any, **kw: Any) -> Any:
             decision = await self.screen(tool_name, _resolve_args(a, kw))
-            if self._stop(decision):
+            if decision.blocked:
                 raise ToolBlocked(decision)
+            if decision.needs_review and not await self.review_runs(decision):
+                raise ToolNeedsReview(decision)
             return await fn(*a, **kw)
 
         wrapped.__name__ = tool_name
