@@ -284,6 +284,34 @@ class PDFAnalysisResult(BaseModel):
     error: str | None = None
 
 
+class ActionRisk(BaseModel):
+    """Calibrated harm estimate for a tool-call payload (``actionRisk``).
+
+    Present only when the scanner's action-risk engine is enabled and the
+    payload is a tool call. In ``mode="shadow"`` it is informational and does
+    not affect the verdict; ``action`` is what this engine alone would
+    recommend at the caller's strictness, not the scan's final verdict.
+    Unknown keys are ignored so newer scanners still parse.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    probability: float | None = None  # 0.0-1.0, likelihood the call is harmful
+    reasons: list[str] = Field(default_factory=list)
+    action: str | None = None  # "Allow" | "Review" | "Block"
+    mode: str | None = None  # "shadow" | "on"
+    calls: int | None = None
+    model_version: str | None = Field(None, alias="modelVersion")
+    record: dict | None = None  # normalized action; opaque
+
+    @field_validator("reasons", mode="before")
+    @classmethod
+    def _reasons(cls, v):
+        if v is None:
+            return []
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Main scan response — matches FileInfoResponse in Go
 # ---------------------------------------------------------------------------
@@ -318,6 +346,9 @@ class ScanResult(BaseModel):
     # severity, reason, evidence}], contextual}. Present when a tool call was
     # flagged; the reason is also mirrored in safety_score.primary_threat.
     action_screen: dict | None = Field(None, alias="actionScreen")
+    # Action risk: calibrated harm probability for tool-call payloads. Absent
+    # when the feature is off or the payload is not a tool call.
+    action_risk: ActionRisk | None = Field(None, alias="actionRisk")
 
 
 class DeferredScanResponse(BaseModel):

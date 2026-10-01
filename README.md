@@ -217,6 +217,8 @@ except ToolBlocked as e:
 
 `ToolNeedsReview` is a subclass of `ToolBlocked`, so a handler that only catches `ToolBlocked` still stops the call. To change what a wrapped tool does on Review, pass `on_review`: `"allow"` runs it, and a function gets the decision and returns `True` to run it (ask the user there). `block_on_review=True/False` still works and means `"hold"`/`"allow"`.
 
+When the scanner returns an action-risk estimate (`ScanResult.action_risk`, from `actionRisk`), the decision also carries `d.risk_probability` (0.0–1.0, or `None` when absent) and `d.risk_reasons` (a list of plain-language reasons, empty when absent). These are informational: the verdict is still `d.action`, and in shadow mode the estimate never changes it.
+
 Context is optional. Pass the fields you have from trusted app state — never from the tool arguments. A callable is only needed if the values change per call.
 
 ```python

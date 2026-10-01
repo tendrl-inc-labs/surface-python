@@ -96,6 +96,10 @@ class Decision:
     tool: str = ""
     context_fields: dict[str, bool] = field(default_factory=dict)
     strictness: str = "balanced"  # the level the call was screened at
+    # From result.action_risk when present (informational; does not change
+    # action). None / [] when the scanner returned no actionRisk.
+    risk_probability: float | None = None
+    risk_reasons: list[str] = field(default_factory=list)
 
     @property
     def allowed(self) -> bool:
@@ -200,7 +204,18 @@ def _decision(res: Any, tool: str = "", ctx: Any = None) -> Decision:
         )
     findings = (getattr(res, "action_screen", None) or {}).get("findings") or []
     reason = ss.primary_threat or (findings[0].get("reason") if findings else "")
-    return Decision(ss.recommended_action, reason or "", findings, res, tool, fields, level)
+    risk = getattr(res, "action_risk", None)
+    return Decision(
+        ss.recommended_action,
+        reason or "",
+        findings,
+        res,
+        tool,
+        fields,
+        level,
+        risk_probability=getattr(risk, "probability", None),
+        risk_reasons=list(getattr(risk, "reasons", None) or []),
+    )
 
 
 def _resolve_args(a: tuple, kw: dict) -> Any:
