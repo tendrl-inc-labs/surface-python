@@ -166,3 +166,19 @@ def test_client_strictness_default():
     ]
     with pytest.raises(ValueError):
         SurfaceClient(api_key="sfk_test", strictness="high")
+
+
+def test_source_and_personal_mail_validated():
+    from surface.models import ActionContext
+    assert ActionContext(source="user_prompt", personal_mail_expected=True).source == "user_prompt"
+    for bad in ({"source": "prompt"}, {"personal_mail_expected": "yes"}):
+        with pytest.raises(Exception):
+            ActionContext.model_validate(bad)
+
+
+def test_middleware_source_option():
+    from surface.middleware import _source_kw
+    assert _source_kw(None) == {}
+    assert _source_kw("user_prompt") == {"context": {"source": "user_prompt"}}
+    with pytest.raises(ValueError):
+        _source_kw("prompt")

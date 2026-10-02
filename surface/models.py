@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Accepted ActionContext.strictness values.
 STRICTNESS_LEVELS = ("relaxed", "balanced", "strict")
+# Who wrote a scanned payload; see ActionContext.source.
+SOURCES = ("user_prompt", "content", "tool_call")
 
 
 class ActionContext(BaseModel):
@@ -35,6 +37,17 @@ class ActionContext(BaseModel):
     # (the scanner's default when omitted) or "strict". Face-dangerous actions
     # Block at every level.
     strictness: str | None = None
+    # Who wrote the payload: "user_prompt" (the person the agent works for),
+    # "content" (text the agent reads: a web page, an email, tool output) or
+    # "tool_call" (an action the agent is about to take). A prompt-injection
+    # match in a user's own prompt is held for Review, never blocked, unless
+    # strictness is "strict"; in content it blocks. Omitted, an injection
+    # blocks only on corroborated evidence.
+    source: str | None = None
+    # Your users routinely correspond with people on personal mailboxes
+    # (customers, candidates, family on Gmail). A send to a personal address
+    # the user named in user_request is then allowed below "strict".
+    personal_mail_expected: bool | None = None
 
     @field_validator("principal_domains", "allowed_egress", mode="before")
     @classmethod
@@ -65,6 +78,22 @@ class ActionContext(BaseModel):
         if v not in STRICTNESS_LEVELS:
             raise ValueError(f"must be one of {', '.join(STRICTNESS_LEVELS)}")
         return v
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _source(cls, v):
+        if v is None:
+            return None
+        if v not in SOURCES:
+            raise ValueError(f"must be one of {', '.join(SOURCES)}")
+        return v
+
+    @field_validator("personal_mail_expected", mode="before")
+    @classmethod
+    def _personal_mail(cls, v):
+        if v is None or isinstance(v, bool):
+            return v
+        raise ValueError("must be a boolean")
 
 
 def parse_action_context(ctx: object) -> ActionContext | None:

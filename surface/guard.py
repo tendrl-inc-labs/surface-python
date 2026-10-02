@@ -278,6 +278,9 @@ class ToolGuard:
             updates["strictness"] = self._strictness
         if user_request and (ctx is None or not ctx.user_request):
             updates["user_request"] = str(user_request)
+        # Everything a guard screens is an action the agent is about to take.
+        if ctx is None or ctx.source is None:
+            updates["source"] = "tool_call"
         if updates:
             ctx = (ctx or ActionContext()).model_copy(update=updates)
         return ctx

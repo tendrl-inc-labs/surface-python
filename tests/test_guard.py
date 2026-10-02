@@ -86,7 +86,8 @@ def test_context_optional():
     d = ToolGuard(fc).screen("t", {"a": 1})
     assert d.action == "Allow"
     assert d.context_present is False
-    assert fc.calls[0][2] is None
+    # The only thing sent is who wrote the payload: a guard screens actions.
+    assert fc.calls[0][2].model_dump(exclude_none=True) == {"source": "tool_call"}
 
 
 def test_invalid_context_rejected():
@@ -240,7 +241,7 @@ def test_screen_user_request_fills_only_a_missing_request():
     ToolGuard(fake, context=CTX).screen("t", {}, user_request="something else")
     assert fake.calls[-1][2].user_request == "pay the vendor"
     ToolGuard(fake).screen("t", {})
-    assert fake.calls[-1][2] is None
+    assert fake.calls[-1][2].user_request is None
 
 
 def test_async_guard_blocks_and_allows():
@@ -288,3 +289,11 @@ def test_async_review_held_and_async_policy():
         assert await AsyncToolGuard(AsyncFake("Review"), on_review=ask).wrap(t)(x=1) == "ok"
 
     asyncio.run(run())
+
+
+def test_guard_marks_source_tool_call_without_overriding():
+    fake = FakeClient("Allow")
+    ToolGuard(fake, context=CTX).screen("t", {})
+    assert fake.calls[-1][2].source == "tool_call"
+    ToolGuard(fake, context={"source": "content"}).screen("t", {})
+    assert fake.calls[-1][2].source == "content"
