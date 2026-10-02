@@ -30,6 +30,8 @@ import functools
 import logging
 from typing import Any, Callable, Sequence
 
+from .models import SOURCES
+
 logger = logging.getLogger("surface.middleware")
 
 
@@ -46,6 +48,15 @@ def _rejected(safety_score: Any, reject_levels: set[str]) -> bool:
     )
 
 
+def _source_kw(source: str | None) -> dict:
+    """scan_payload keyword arguments for a middleware ``source`` setting."""
+    if source is None:
+        return {}
+    if source not in SOURCES:
+        raise ValueError(f"source must be one of {', '.join(SOURCES)}")
+    return {"context": {"source": source}}
+
+
 def scan_request(
     client: Any,
     *,
@@ -55,6 +66,7 @@ def scan_request(
     min_size: int = 0,
     on_threat: Callable[..., None] | None = None,
     on_error: Callable[..., None] | None = None,
+    source: str | None = None,
 ) -> Callable:
     """Decorator that scans incoming request bodies before the handler runs.
 
@@ -68,8 +80,13 @@ def scan_request(
         min_size: Minimum body size to scan (skip smaller payloads).
         on_threat: Callback when a threat is detected. Receives (request, scan_result).
         on_error: Callback when scanning fails. Receives (request, error).
+        source: Who wrote the body: "user_prompt" for a chat or agent endpoint
+            your own users type into (a prompt-injection match there is held
+            for Review, not blocked, unless the client is strict), "content" for
+            text from elsewhere that an agent will read. Omit if unknown.
     """
     reject_levels = {reject.lower()} if isinstance(reject, str) else {r.lower() for r in reject}
+    scan_kw = _source_kw(source)
 
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -98,9 +115,9 @@ def scan_request(
                 if hasattr(client, "scan_payload") and not hasattr(
                     client, "__aenter__"
                 ):
-                    result = client.scan_payload(body, label)
+                    result = client.scan_payload(body, label, **scan_kw)
                 else:
-                    result = await client.scan_payload(body, label)
+                    result = await client.scan_payload(body, label, **scan_kw)
             except Exception as e:
                 if on_error:
                     on_error(request, e)
@@ -153,7 +170,7 @@ def scan_request(
                 return func(*args, **kwargs)
 
             try:
-                result = client.scan_payload(body, label)
+                result = client.scan_payload(body, label, **scan_kw)
             except Exception as e:
                 if on_error:
                     on_error(request, e)
@@ -213,8 +230,10 @@ class ScanMiddleware:
         min_size: int = 0,
         on_threat: Callable[..., None] | None = None,
         on_error: Callable[..., None] | None = None,
+        source: str | None = None,
     ):
         self.app = app
+        self._scan_kw = _source_kw(source)
         self.client = client
         self.reject_levels = {reject.lower()} if isinstance(reject, str) else {r.lower() for r in reject}
         self.paths = paths
@@ -285,9 +304,9 @@ class ScanMiddleware:
         # Scan the body
         try:
             if hasattr(self.client, "__aenter__"):
-                result = await self.client.scan_payload(body, self.label)
+                result = await self.client.scan_payload(body, self.label, **self._scan_kw)
             else:
-                result = self.client.scan_payload(body, self.label)
+                result = self.client.scan_payload(body, self.label, **self._scan_kw)
         except Exception as e:
             if self.on_error:
                 self.on_error(path, e)
