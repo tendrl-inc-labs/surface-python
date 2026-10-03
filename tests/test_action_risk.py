@@ -101,3 +101,16 @@ async def test_async_decision_exposes_risk():
     assert d.action == "Allow"
     assert d.risk_probability == pytest.approx(0.87)
     assert d.risk_reasons == RISK["reasons"]
+
+
+def test_parses_content_risk():
+    from surface import ContentRisk
+    data = _data()
+    data["contentRisk"] = {"probability": 0.97, "reasons": ["addresses an AI agent and asks it to act"],
+                           "action": "Review", "mode": "shadow", "modelVersion": "content-risk-1", "future": 1}
+    cr = ScanResult.model_validate(data).content_risk
+    assert isinstance(cr, ContentRisk)
+    assert cr.probability == pytest.approx(0.97)
+    assert (cr.action, cr.mode, cr.model_version) == ("Review", "shadow", "content-risk-1")
+    assert cr.reasons == ["addresses an AI agent and asks it to act"]
+    assert ScanResult.model_validate(_data()).content_risk is None

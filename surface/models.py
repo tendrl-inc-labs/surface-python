@@ -341,6 +341,34 @@ class ActionRisk(BaseModel):
         return v
 
 
+class ContentRisk(BaseModel):
+    """Calibrated estimate that text an agent reads tries to steer it into a
+    harmful action (``contentRisk``): a request planted in a page, email,
+    ticket or tool output, usually with no override wording.
+
+    Present only when the scanner's content-risk engine is enabled and the
+    payload is content (``source="content"``) or unlabeled; never for a user's
+    own prompt or a tool call. In ``mode="shadow"`` it is informational and
+    does not affect the verdict; ``action`` is what this engine alone would
+    recommend at the caller's strictness. Unknown keys are ignored.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    probability: float | None = None  # 0.0-1.0, likelihood the content is an injection
+    reasons: list[str] = Field(default_factory=list)
+    action: str | None = None  # "Allow" | "Review" | "Block"
+    mode: str | None = None  # "shadow" | "on"
+    model_version: str | None = Field(None, alias="modelVersion")
+
+    @field_validator("reasons", mode="before")
+    @classmethod
+    def _reasons(cls, v):
+        if v is None:
+            return []
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Main scan response — matches FileInfoResponse in Go
 # ---------------------------------------------------------------------------
@@ -378,6 +406,9 @@ class ScanResult(BaseModel):
     # Action risk: calibrated harm probability for tool-call payloads. Absent
     # when the feature is off or the payload is not a tool call.
     action_risk: ActionRisk | None = Field(None, alias="actionRisk")
+    # Content risk: calibrated injection estimate for content an agent reads.
+    # Absent when the feature is off or the payload is a prompt or tool call.
+    content_risk: ContentRisk | None = Field(None, alias="contentRisk")
 
 
 class DeferredScanResponse(BaseModel):
