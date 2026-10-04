@@ -152,9 +152,11 @@ Set it once on the guard (`ToolGuard(client, strictness="strict")`) or the clien
 
 | | `relaxed` | `balanced` (default) | `strict` |
 |---|---|---|---|
-| Plain email to a Gmail/Outlook address | Allow | Allow | Review |
-| Document to a free-mail address nobody named | Allow | Review | Review |
-| Sensitive or bulk data (customers, directory, payroll, exports) to a free-mail address | Review | Review | Block |
+| Email or a document to a Gmail/Outlook address, with no `user_request` or one that names the address | Allow | Allow | Review |
+| Document to a free-mail address the `user_request` never named | Review | Review | Review |
+| Sensitive data (customers, directory, payroll, exports) to a free-mail address, with no `user_request` or one that names it | Allow | Allow | Block |
+| The same, when `user_request` never named the address | Review | Review | Block |
+| A message describing bulk data ("all customer records") to a free-mail address | Review | Review | Block |
 | The same, with `personal_mail_expected` and the address named in `user_request` | Allow | Allow | Block |
 | Plain email to an outside company | Allow | Allow | Review |
 | Document to an outside recipient nobody named | Allow | Review | Review |
@@ -172,7 +174,7 @@ Set it once on the guard (`ToolGuard(client, strictness="strict")`) or the clien
 ActionContext(principal_domains=["acme.io"], user_request=user_message, strictness="strict")
 ```
 
-The outside-company rows need `principal_domains`, since without it nothing counts as outside. A request holds a risky action for Review rather than refusing it outright: Review means a person confirms before the agent acts, and a request can also be where a direct injection arrives. Wiping the system itself and sending credentials out Block whoever asked. Wording in a message body is not treated as data: "here is your password reset link" to a Gmail customer passes, while an actual key in the body does not. `relaxed` skips the request-fit check, so it won't catch an agent that was talked into emailing a stranger by a poisoned page or document. Omit `strictness` and you get `balanced`, so an agent with no configuration isn't stopped while it does routine work. A recipient or domain named in `user_request` clears the Review cases, but sensitive data going to a personal mailbox is still held for Review when the request names it, because the request is where a direct injection arrives. If your users routinely correspond with people on personal mailboxes (customers, candidates, family), set `personal_mail_expected=True` and a send to an address the user named passes below `strict`. The recipient's own address never counts as the data: `hr.backup@gmail.com` is not a backup being sent.
+The outside-company rows need `principal_domains`, since without it nothing counts as outside. A request holds a risky action for Review rather than refusing it outright: Review means a person confirms before the agent acts, and a request can also be where a direct injection arrives. Wiping the system itself and sending credentials out Block whoever asked. Wording in a message body is not treated as data: "here is your password reset link" to a Gmail customer passes, while an actual key in the body does not. `relaxed` skips the request-fit check, so it won't catch an agent that was talked into emailing a stranger by a poisoned page or document. Omit `strictness` and you get `balanced`, so an agent with no configuration isn't stopped while it does routine work. A recipient or domain named in `user_request` clears the Review cases, unless the message describes bulk data or the request is itself an override ("ignore previous instructions"). Agents mail customers and candidates on Gmail all day, so without `user_request` a send to a personal mailbox is not judged below `strict`: pass it. If your users routinely correspond with people on personal mailboxes (customers, candidates, family), set `personal_mail_expected=True` and even a bulk send to an address the user named passes below `strict`. The recipient's own address never counts as the data: `hr.backup@gmail.com` is not a backup being sent.
 
 **Who wrote it: `source`**
 
