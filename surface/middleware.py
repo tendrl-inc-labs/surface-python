@@ -9,7 +9,7 @@ Usage (ASGI middleware — scans all matching routes)::
     from surface.middleware import ScanMiddleware
 
     client = SurfaceClient("sfk_your_token_here")
-    app.add_middleware(ScanMiddleware, client=client, reject=["Malicious"])
+    app.add_middleware(ScanMiddleware, client=client)  # rejects what Surface recommends blocking
 
 Usage (decorator — per-route control)::
 
@@ -60,7 +60,7 @@ def _source_kw(source: str | None) -> dict:
 def scan_request(
     client: Any,
     *,
-    reject: str | Sequence[str] = ("Malicious",),
+    reject: str | Sequence[str] = ("Block",),
     label: str = "middleware-scan",
     fail_open: bool = True,
     min_size: int = 0,
@@ -74,7 +74,7 @@ def scan_request(
 
     Args:
         client: SurfaceClient or AsyncSurfaceClient instance.
-        reject: Threat levels ("Malicious"/"Suspicious") or recommended actions ("Block"/"Review") to block (default: ["Malicious"]).
+        reject: Threat levels ("Malicious"/"Suspicious") or recommended actions ("Block"/"Review") to block (default: ["Block"], so whatever Surface recommends blocking is rejected: Malicious, Risky, or a type the profile refuses).
         label: Label for the scan in history.
         fail_open: If True (default), pass requests through when scanner is unavailable.
         min_size: Minimum body size to scan (skip smaller payloads).
@@ -223,7 +223,7 @@ class ScanMiddleware:
         app: Any,
         *,
         client: Any,
-        reject: str | Sequence[str] = ("Malicious",),
+        reject: str | Sequence[str] = ("Block",),
         paths: Sequence[str] | None = None,
         label: str = "middleware-scan",
         fail_open: bool = True,
