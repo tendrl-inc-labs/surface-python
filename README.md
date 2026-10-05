@@ -341,7 +341,7 @@ For application-wide scanning, use the ASGI middleware with FastAPI or Starlette
 ```python
 from surface.middleware import ScanMiddleware
 
-app.add_middleware(ScanMiddleware, client=client, reject=["Malicious"])
+app.add_middleware(ScanMiddleware, client=client)  # rejects what Surface recommends blocking
 ```
 
 Flask sync routes are also supported via the same `@scan_request` decorator.
