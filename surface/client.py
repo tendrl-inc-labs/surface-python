@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import os
+import socket
+import time
 from pathlib import Path
-from typing import IO, Any, Union
+from typing import IO, Any, TypeVar, Union
 
 import httpx
+import pydantic
 
 from .decorator import MaliciousFileError
 from .errors import (
@@ -17,6 +21,7 @@ from .errors import (
     QuotaExceededError,
     RateLimitError,
     SurfaceError,
+    SurfaceUnavailableError,
     ValidationError,
 )
 from .models import (
@@ -76,23 +81,192 @@ def _prepare_file(file: FileInput) -> tuple[str, bytes]:
     return str(name), file.read()
 
 
+# One budget per SDK call, covering every attempt and every wait between them.
+DEFAULT_TIMEOUT = 60.0
+# 500 is a real failure (no retry); 502/503/504 are a restarting or overloaded
+# scanner — every hosted deploy answers 503 for ~45 s while it warms up.
+_UNAVAILABLE_STATUSES = frozenset({500, 502, 503, 504})
+_RETRY_STATUSES = frozenset({502, 503, 504})
+_MAX_RETRIES = 10
+_MAX_RETRY_WAIT = 10.0
+# Waits without a Retry-After header; the last one repeats. Tests shrink this.
+_BACKOFF = (1.0, 2.0, 4.0, 8.0)
+
+
+def _retry_after(resp: httpx.Response | None) -> float | None:
+    """The response's Retry-After in seconds, capped; None if absent or a date."""
+    raw = resp.headers.get("retry-after") if resp is not None else None
+    try:
+        secs = float(raw) if raw else None
+    except ValueError:
+        return None
+    if secs is None or secs < 0:
+        return None
+    return min(secs, _MAX_RETRY_WAIT)
+
+
+def _retry_wait(resp: httpx.Response | None, attempt: int) -> float:
+    after = _retry_after(resp)
+    if after is not None:
+        return after
+    return _BACKOFF[min(attempt, len(_BACKOFF) - 1)]
+
+
+def _retryable_transport_error(exc: httpx.TransportError) -> bool:
+    """Refused or reset connections retry; DNS failures and timeouts don't."""
+    if isinstance(exc, httpx.ConnectError):
+        cause: BaseException | None = exc
+        while cause is not None:
+            if isinstance(cause, socket.gaierror):
+                return False
+            cause = cause.__cause__ or cause.__context__
+        return True
+    return isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError))
+
+
+def _timed_out(budget: float) -> SurfaceUnavailableError:
+    return SurfaceUnavailableError(f"Surface did not answer within {budget:g}s")
+
+
+def _unreachable(exc: httpx.TransportError) -> SurfaceUnavailableError:
+    return SurfaceUnavailableError(f"Surface is unreachable: {exc or type(exc).__name__}")
+
+
+def _send(http: httpx.Client, budget: float, method: str, url: str, **kw: Any) -> httpx.Response:
+    """Send one SDK call's request, retrying transient unavailability within ``budget``.
+
+    Returns the final response (which may still be an error for
+    _raise_for_status to classify). Request bodies are rebuilt from ``kw`` on
+    every attempt, so multipart uploads retry intact.
+    """
+    deadline = time.monotonic() + budget
+    last: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            last = http.request(method, url, timeout=remaining, **kw)
+        except httpx.TimeoutException as e:
+            # The budget is spent; report the last 5xx seen if there was one.
+            if last is not None:
+                return last
+            raise _timed_out(budget) from e
+        except httpx.TransportError as e:
+            if attempt >= _MAX_RETRIES or not _retryable_transport_error(e):
+                raise _unreachable(e) from e
+            wait = _retry_wait(None, attempt)
+            # Never start a wait that would end past the budget.
+            if time.monotonic() + wait >= deadline:
+                raise _unreachable(e) from e
+        else:
+            if attempt >= _MAX_RETRIES or last.status_code not in _RETRY_STATUSES:
+                return last
+            wait = _retry_wait(last, attempt)
+            if time.monotonic() + wait >= deadline:
+                return last
+        time.sleep(wait)
+    if last is not None:
+        return last
+    raise _timed_out(budget)
+
+
+async def _asend(
+    http: httpx.AsyncClient, budget: float, method: str, url: str, **kw: Any
+) -> httpx.Response:
+    """Async twin of :func:`_send`."""
+    deadline = time.monotonic() + budget
+    last: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            last = await http.request(method, url, timeout=remaining, **kw)
+        except httpx.TimeoutException as e:
+            if last is not None:
+                return last
+            raise _timed_out(budget) from e
+        except httpx.TransportError as e:
+            if attempt >= _MAX_RETRIES or not _retryable_transport_error(e):
+                raise _unreachable(e) from e
+            wait = _retry_wait(None, attempt)
+            if time.monotonic() + wait >= deadline:
+                raise _unreachable(e) from e
+        else:
+            if attempt >= _MAX_RETRIES or last.status_code not in _RETRY_STATUSES:
+                return last
+            wait = _retry_wait(last, attempt)
+            if time.monotonic() + wait >= deadline:
+                return last
+        await asyncio.sleep(wait)
+    if last is not None:
+        return last
+    raise _timed_out(budget)
+
+
+def _json_or_none(resp: httpx.Response) -> Any:
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def _json(resp: httpx.Response) -> dict[str, Any]:
+    """The response's JSON object, or SurfaceUnavailableError (e.g. an HTML page)."""
+    body = _json_or_none(resp)
+    if not isinstance(body, dict):
+        raise SurfaceUnavailableError(
+            f"Surface returned a non-JSON response (HTTP {resp.status_code})",
+            status_code=resp.status_code,
+        )
+    return body
+
+
+_M = TypeVar("_M", bound=pydantic.BaseModel)
+
+
+def _parse(model: type[_M], resp: httpx.Response) -> _M:
+    """Validate the response into ``model``; an unexpected shape is not a real answer."""
+    try:
+        return model.model_validate(_json(resp))
+    except pydantic.ValidationError as e:
+        raise SurfaceUnavailableError(
+            f"Surface returned an unexpected response (HTTP {resp.status_code})",
+            status_code=resp.status_code,
+        ) from e
+
+
 def _raise_for_status(resp: httpx.Response) -> None:
     if resp.is_success:
         return
-    body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-    msg = body.get("error", resp.text)
+    status = resp.status_code
+    body = _json_or_none(resp)
+    if not isinstance(body, dict):
+        # The mapped 4xx keep their types with the raw text; anything else
+        # without a JSON body came from something other than Surface.
+        if status not in (400, 401, 404, 429):
+            raise SurfaceUnavailableError(
+                f"Surface returned a non-JSON response (HTTP {status})", status_code=status
+            )
+        body = {}
+    msg = body.get("error") or resp.text
     rid = body.get("requestId")
-    if resp.status_code == 401:
+    if status in _UNAVAILABLE_STATUSES:
+        raise SurfaceUnavailableError(
+            f"Surface is unavailable (HTTP {status}): {msg}", status_code=status, request_id=rid
+        )
+    if status == 401:
         raise AuthenticationError(msg, request_id=rid)
-    if resp.status_code == 404:
+    if status == 404:
         raise NotFoundError(msg, request_id=rid)
-    if resp.status_code == 400:
+    if status == 400:
         raise ValidationError(msg, request_id=rid)
-    if resp.status_code == 429:
+    if status == 429:
         if "quota" in msg.lower() or "credit" in msg.lower():
             raise QuotaExceededError(msg, request_id=rid)
         raise RateLimitError(msg, request_id=rid)
-    raise SurfaceError(msg, status_code=resp.status_code, request_id=rid)
+    raise SurfaceError(msg, status_code=status, request_id=rid)
 
 
 class SurfaceClient:
@@ -112,6 +286,10 @@ class SurfaceClient:
         # Local mode — requires the scanner daemon running on localhost
         client = SurfaceClient("sfk_your_token_here", mode="local")
         result = client.scan_file("malware.exe")
+
+    ``timeout`` is the budget in seconds for each call, covering retries of
+    502/503/504 and refused connections. When Surface gives no real answer in
+    time the call raises :class:`SurfaceUnavailableError`.
     """
 
     def __init__(
@@ -121,12 +299,15 @@ class SurfaceClient:
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
         strictness: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         if strictness is not None and strictness not in STRICTNESS_LEVELS:
             raise ValueError(f"strictness must be one of {', '.join(STRICTNESS_LEVELS)}")
         # Default ActionContext.strictness for scan_payload; a context that
         # sets its own wins. None leaves the scanner default (balanced).
         self.strictness = strictness
+        # Seconds per SDK call, across all attempts and retry waits.
+        self.timeout = timeout
         self.mode = mode
         self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
@@ -136,7 +317,7 @@ class SurfaceClient:
         if mode == "local":
             self._scanner_client = httpx.Client(
                 base_url=self.scanner_url,
-                timeout=120.0,
+                timeout=timeout,
             )
 
         # Local mode without a key gets no hosted client at all; _cloud raises a
@@ -145,7 +326,7 @@ class SurfaceClient:
             httpx.Client(
                 base_url=self.base_url,
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=120.0,
+                timeout=timeout,
                 http2=True,
             )
             if self.api_key
@@ -210,14 +391,20 @@ class SurfaceClient:
 
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = self._scanner_client.post(
+            resp = _send(
+                self._scanner_client,
+                self.timeout,
+                "POST",
                 "/scan",
                 files={"file": (filename, content)},
                 params=params,
                 headers=headers,
             )
         else:
-            resp = self._cloud.post(
+            resp = _send(
+                self._cloud,
+                self.timeout,
+                "POST",
                 "/scan",
                 files={"file": (filename, content)},
                 params=params,
@@ -226,9 +413,9 @@ class SurfaceClient:
 
         _raise_for_status(resp)
         if resp.status_code == 202:
-            return DeferredScanResponse.model_validate(resp.json())
+            return _parse(DeferredScanResponse, resp)
 
-        result = ScanResult.model_validate(resp.json())
+        result = _parse(ScanResult, resp)
 
         if reject:
             # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
@@ -302,14 +489,20 @@ class SurfaceClient:
 
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = self._scanner_client.post(
+            resp = _send(
+                self._scanner_client,
+                self.timeout,
+                "POST",
                 "/scan/payload",
                 json=body,
                 params=params,
                 headers=headers,
             )
         else:
-            resp = self._cloud.post(
+            resp = _send(
+                self._cloud,
+                self.timeout,
+                "POST",
                 "/scan/payload",
                 json=body,
                 params=params,
@@ -318,9 +511,9 @@ class SurfaceClient:
 
         _raise_for_status(resp)
         if resp.status_code == 202:
-            return DeferredScanResponse.model_validate(resp.json())
+            return _parse(DeferredScanResponse, resp)
 
-        result = ScanResult.model_validate(resp.json())
+        result = _parse(ScanResult, resp)
 
         if reject:
             # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
@@ -340,34 +533,36 @@ class SurfaceClient:
         """Poll a deferred scan by ID. Returns raw dict (status may be 'pending' or 'complete')."""
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = self._scanner_client.get(f"/scan/{scan_id}")
+            resp = _send(self._scanner_client, self.timeout, "GET", f"/scan/{scan_id}")
         else:
-            resp = self._cloud.get(f"/scan/{scan_id}")
+            resp = _send(self._cloud, self.timeout, "GET", f"/scan/{scan_id}")
         _raise_for_status(resp)
-        return resp.json()
+        return _json(resp)
 
     # ------------------------------------------------------------------
     # Account / usage
     # ------------------------------------------------------------------
 
     def get_usage(self) -> Usage:
-        resp = self._cloud.get("/account/usage")
+        resp = _send(self._cloud, self.timeout, "GET", "/account/usage")
         _raise_for_status(resp)
-        return Usage.model_validate(resp.json())
+        return _parse(Usage, resp)
 
     def get_account(self) -> dict[str, Any]:
-        resp = self._cloud.get("/account")
+        resp = _send(self._cloud, self.timeout, "GET", "/account")
         _raise_for_status(resp)
-        return resp.json()
+        return _json(resp)
 
     # ------------------------------------------------------------------
     # Scan history
     # ------------------------------------------------------------------
 
     def get_scan_history(self, page: int = 1, limit: int = 25) -> ScanHistoryPage:
-        resp = self._cloud.get("/account/history", params={"page": page, "limit": limit})
+        resp = _send(
+            self._cloud, self.timeout, "GET", "/account/history", params={"page": page, "limit": limit}
+        )
         _raise_for_status(resp)
-        return ScanHistoryPage.model_validate(resp.json())
+        return _parse(ScanHistoryPage, resp)
 
 
 # ------------------------------------------------------------------
@@ -385,6 +580,9 @@ class AsyncSurfaceClient:
         # Batch scan multiple files concurrently
         async with AsyncSurfaceClient() as client:
             results = await client.scan_files(["a.exe", "b.pdf", "c.zip"])
+
+    ``timeout`` works as on :class:`SurfaceClient`: seconds per call, retries
+    included, then :class:`SurfaceUnavailableError`.
     """
 
     def __init__(
@@ -395,12 +593,15 @@ class AsyncSurfaceClient:
         mode: str = "api",
         scanner_url: str = "http://127.0.0.1:8090",
         strictness: str | None = None,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         if strictness is not None and strictness not in STRICTNESS_LEVELS:
             raise ValueError(f"strictness must be one of {', '.join(STRICTNESS_LEVELS)}")
         # Default ActionContext.strictness for scan_payload; a context that
         # sets its own wins. None leaves the scanner default (balanced).
         self.strictness = strictness
+        # Seconds per SDK call, across all attempts and retry waits.
+        self.timeout = timeout
         self.mode = mode
         self.base_url = _resolve_base_url(base_url)
         self.scanner_url = scanner_url.rstrip("/")
@@ -411,7 +612,7 @@ class AsyncSurfaceClient:
         if mode == "local":
             self._scanner_client = httpx.AsyncClient(
                 base_url=self.scanner_url,
-                timeout=120.0,
+                timeout=timeout,
             )
 
         # Local mode without a key gets no hosted client at all; _cloud raises a
@@ -420,7 +621,7 @@ class AsyncSurfaceClient:
             httpx.AsyncClient(
                 base_url=self.base_url,
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=120.0,
+                timeout=timeout,
                 http2=True,
             )
             if self.api_key
@@ -472,14 +673,20 @@ class AsyncSurfaceClient:
 
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = await self._scanner_client.post(
+            resp = await _asend(
+                self._scanner_client,
+                self.timeout,
+                "POST",
                 "/scan",
                 files={"file": (filename, content)},
                 params=params,
                 headers=headers,
             )
         else:
-            resp = await self._cloud.post(
+            resp = await _asend(
+                self._cloud,
+                self.timeout,
+                "POST",
                 "/scan",
                 files={"file": (filename, content)},
                 params=params,
@@ -488,9 +695,9 @@ class AsyncSurfaceClient:
 
         _raise_for_status(resp)
         if resp.status_code == 202:
-            return DeferredScanResponse.model_validate(resp.json())
+            return _parse(DeferredScanResponse, resp)
 
-        result = ScanResult.model_validate(resp.json())
+        result = _parse(ScanResult, resp)
 
         if reject:
             # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
@@ -556,14 +763,20 @@ class AsyncSurfaceClient:
 
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = await self._scanner_client.post(
+            resp = await _asend(
+                self._scanner_client,
+                self.timeout,
+                "POST",
                 "/scan/payload",
                 json=body,
                 params=params,
                 headers=headers,
             )
         else:
-            resp = await self._cloud.post(
+            resp = await _asend(
+                self._cloud,
+                self.timeout,
+                "POST",
                 "/scan/payload",
                 json=body,
                 params=params,
@@ -572,9 +785,9 @@ class AsyncSurfaceClient:
 
         _raise_for_status(resp)
         if resp.status_code == 202:
-            return DeferredScanResponse.model_validate(resp.json())
+            return _parse(DeferredScanResponse, resp)
 
-        result = ScanResult.model_validate(resp.json())
+        result = _parse(ScanResult, resp)
 
         if reject:
             # reject matches on threat level ("Clean"/"Suspicious"/"Malicious")
@@ -615,34 +828,36 @@ class AsyncSurfaceClient:
     async def get_scan(self, scan_id: str) -> dict[str, Any]:
         if self.mode == "local":
             assert self._scanner_client is not None, "Scanner client not initialized"
-            resp = await self._scanner_client.get(f"/scan/{scan_id}")
+            resp = await _asend(self._scanner_client, self.timeout, "GET", f"/scan/{scan_id}")
         else:
-            resp = await self._cloud.get(f"/scan/{scan_id}")
+            resp = await _asend(self._cloud, self.timeout, "GET", f"/scan/{scan_id}")
         _raise_for_status(resp)
-        return resp.json()
+        return _json(resp)
 
     # ------------------------------------------------------------------
     # Account / usage
     # ------------------------------------------------------------------
 
     async def get_usage(self) -> Usage:
-        resp = await self._cloud.get("/account/usage")
+        resp = await _asend(self._cloud, self.timeout, "GET", "/account/usage")
         _raise_for_status(resp)
-        return Usage.model_validate(resp.json())
+        return _parse(Usage, resp)
 
     async def get_account(self) -> dict[str, Any]:
-        resp = await self._cloud.get("/account")
+        resp = await _asend(self._cloud, self.timeout, "GET", "/account")
         _raise_for_status(resp)
-        return resp.json()
+        return _json(resp)
 
     # ------------------------------------------------------------------
     # Scan history
     # ------------------------------------------------------------------
 
     async def get_scan_history(self, page: int = 1, limit: int = 25) -> ScanHistoryPage:
-        resp = await self._cloud.get("/account/history", params={"page": page, "limit": limit})
+        resp = await _asend(
+            self._cloud, self.timeout, "GET", "/account/history", params={"page": page, "limit": limit}
+        )
         _raise_for_status(resp)
-        return ScanHistoryPage.model_validate(resp.json())
+        return _parse(ScanHistoryPage, resp)
 
 
 # ------------------------------------------------------------------

@@ -46,3 +46,16 @@ class RateLimitError(SurfaceError):
 
     def __init__(self, message: str = "Rate limit exceeded", request_id: str | None = None):
         super().__init__(message, status_code=429, request_id=request_id)
+
+
+class SurfaceUnavailableError(SurfaceError):
+    """Raised when Surface gave no real answer.
+
+    Covers transport failures (refused, reset, DNS), the call's ``timeout``
+    running out, HTTP 500/502/503/504, and a body that is not the JSON the SDK
+    expects (e.g. a proxy's HTML error page). ``status_code`` is 0 when there
+    was no HTTP response.
+    """
+
+    def __init__(self, message: str = "Surface is unavailable", status_code: int = 0, request_id: str | None = None):
+        super().__init__(message, status_code=status_code, request_id=request_id)
