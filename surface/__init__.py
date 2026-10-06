@@ -19,6 +19,7 @@ from .errors import (
     QuotaExceededError,
     RateLimitError,
     SurfaceError,
+    SurfaceUnavailableError,
     ValidationError,
 )
 from .models import (
@@ -75,6 +76,7 @@ __all__ = [
     "verify_webhook_signature",
     # Errors
     "SurfaceError",
+    "SurfaceUnavailableError",
     "AuthenticationError",
     "NotFoundError",
     "QuotaExceededError",

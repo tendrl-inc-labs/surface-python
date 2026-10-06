@@ -444,6 +444,7 @@ from surface import (
     RateLimitError,
     NotFoundError,
     ValidationError,
+    SurfaceUnavailableError,
 )
 
 try:
@@ -454,9 +455,26 @@ except RateLimitError:
     print("Rate limit hit, slow down")
 except AuthenticationError:
     print("Invalid API key")
+except SurfaceUnavailableError:
+    print("Surface gave no answer; nothing was scanned")
 except SurfaceError as e:
     print(f"API error {e.status_code}: {e.message}")
 ```
+
+## When Surface is unavailable
+
+Anything that isn't a real answer from Surface raises `SurfaceUnavailableError` (a `SurfaceError`): a refused or reset connection, a DNS failure, the call's timeout running out, HTTP 500/502/503/504, or a non-4xx response whose body isn't the JSON the SDK expects (such as a proxy's HTML error page). `status_code` holds the HTTP status when there was one (0 otherwise), and the message includes the server's `error` text when it sent JSON. Every 4xx keeps its usual error whatever the body: a 429 still raises `RateLimitError`/`QuotaExceededError`, and other 4xx raise the same errors as before.
+
+Each call has a 60-second budget that covers every attempt and every wait in between. Change it per client:
+
+```python
+client = SurfaceClient(timeout=15)            # seconds; API or local mode
+client = AsyncSurfaceClient(timeout=15)
+```
+
+Within that budget the SDK retries HTTP 502, 503 and 504 and refused or reset connections, waiting for the response's `Retry-After` (capped at 10 s) or else 1, 2, 4, 8, 8… seconds, up to 10 retries. It never starts a wait that would end past the budget, and it doesn't retry a 500, a 4xx, or a request that hung until the budget ran out. A scan during a Surface deploy, when the scanner answers 503 while it warms up, is slower rather than failed.
+
+`ToolGuard`, `AsyncToolGuard` and `surface_hooks` fail closed: on `SurfaceUnavailableError` the tool does not run and the error propagates. The middleware follows `fail_open` (default `True`, so requests pass through unscanned); set `fail_open=False` to answer 503 instead.
 
 ## Requirements
 
