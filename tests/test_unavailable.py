@@ -255,6 +255,22 @@ def test_429_unchanged_and_not_retried(fake):
     assert len(s.requests) == 1
 
 
+@pytest.mark.parametrize("status", [403, 413])
+def test_non_json_4xx_keeps_surface_error(fake, status):
+    s = fake((status, {"Content-Type": "text/html"}, "<html>Forbidden</html>"))
+    with pytest.raises(SurfaceError) as ei:
+        _client(s).scan_payload("hello")
+    assert not isinstance(ei.value, SurfaceUnavailableError)
+    assert ei.value.status_code == status
+    assert len(s.requests) == 1
+
+
+def test_html_429_is_still_rate_limit(fake):
+    s = fake((429, {"Content-Type": "text/html"}, "<html>Too Many Requests</html>"))
+    with pytest.raises(RateLimitError):
+        _client(s).scan_payload("hello")
+
+
 def test_multipart_upload_rebuilt_on_retry(fake):
     s = fake(_err(503, "warming up"), OK)
     _client(s).scan_file(b"FILE-CONTENT-123")

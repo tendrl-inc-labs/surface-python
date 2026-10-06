@@ -243,9 +243,9 @@ def _raise_for_status(resp: httpx.Response) -> None:
     status = resp.status_code
     body = _json_or_none(resp)
     if not isinstance(body, dict):
-        # The mapped 4xx keep their types with the raw text; anything else
+        # Every 4xx keeps its usual error with the raw text; any other status
         # without a JSON body came from something other than Surface.
-        if status not in (400, 401, 404, 429):
+        if not 400 <= status < 500:
             raise SurfaceUnavailableError(
                 f"Surface returned a non-JSON response (HTTP {status})", status_code=status
             )
