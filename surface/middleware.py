@@ -8,7 +8,7 @@ Usage (ASGI middleware — scans all matching routes)::
     from surface import SurfaceClient
     from surface.middleware import ScanMiddleware
 
-    client = SurfaceClient("sfk_your_token_here")
+    client = SurfaceClient("your-surface-token")
     app.add_middleware(ScanMiddleware, client=client)  # rejects what Surface recommends blocking
 
 Usage (decorator — per-route control)::
@@ -16,7 +16,7 @@ Usage (decorator — per-route control)::
     from surface import SurfaceClient
     from surface.middleware import scan_request
 
-    client = SurfaceClient("sfk_your_token_here")
+    client = SurfaceClient("your-surface-token")
 
     @app.post("/agent/receive")
     @scan_request(client, reject=["Malicious", "Suspicious"])
@@ -209,7 +209,7 @@ class ScanMiddleware:
         from surface import SurfaceClient
         from surface.middleware import ScanMiddleware
 
-        client = SurfaceClient("sfk_your_token_here")
+        client = SurfaceClient("your-surface-token")
         app.add_middleware(
             ScanMiddleware,
             client=client,

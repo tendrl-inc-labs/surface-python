@@ -4,6 +4,8 @@ Python client for the [Surface](https://tendrl.com/products/surface) file scanni
 
 ## Installation
 
+Requires Python 3.11+.
+
 ```bash
 uv pip install "git+https://github.com/tendrl-inc-labs/surface-python"
 
@@ -11,12 +13,20 @@ uv pip install "git+https://github.com/tendrl-inc-labs/surface-python"
 pip install "git+https://github.com/tendrl-inc-labs/surface-python"
 ```
 
+To pin a release instead of tracking the default branch, add the tag:
+
+```bash
+uv pip install "git+https://github.com/tendrl-inc-labs/surface-python@v0.3.0"
+```
+
 ## Scan Modes
 
 | Mode | Description | API Key Required | Network Required |
 |------|-------------|-----------------|-----------------|
 | **API** (default) | Sends files to the Surface API | Yes | Yes |
-| **Local** | Sends files to a local scanner daemon | No | No |
+| **Local** | Sends files to a local scanner daemon | No (the daemon itself needs one to start) | No |
+
+In local mode the SDK's calls to the daemon carry no key, but the `surface-scanner` daemon refuses to start without one. See [Quick Start — Local Mode](#quick-start--local-mode).
 
 ## Quick Start — API Mode
 
@@ -30,8 +40,10 @@ def process(result: ScanResult):
     print(result.safety_score.threat_level)  # Clean, Informational, Suspicious, Risky, or Malicious
     # ... your logic runs only for accepted files
 
-process("suspicious.exe")   # you pass the file; process() gets the result
+process("invoice.pdf")   # you pass the file; process() gets the result
 ```
+
+The examples scan documents and archives, which the Default scan profile accepts. Executables and scripts (`.exe`, `.sh`, ...) are refused by type with a `ValidationError` unless the key's profile allows them; see [scan profiles](https://tendrl.com/docs/surface/scan-profiles/).
 
 `reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`) — a rejected file raises `MaliciousFileError` before your function runs.
 
@@ -44,10 +56,10 @@ from surface import SurfaceClient
 client = SurfaceClient()
 
 # Or pass explicitly
-client = SurfaceClient("sfk_your_token_here")
+client = SurfaceClient("your-surface-token")
 
 # Scan a file
-result = client.scan_file("suspicious.exe")
+result = client.scan_file("invoice.pdf")
 print(result.safety_score.threat_level)  # Clean, Informational, Suspicious, Risky, or Malicious
 print(result.safety_score.score)          # 0-100 safety score
 
@@ -58,13 +70,17 @@ with SurfaceClient() as client:
 
 ## Quick Start — Local Mode
 
-Requires the scanner daemon running on localhost (e.g. `surface-scanner --daemon --listen=:8090`).
+Requires the scanner daemon running on localhost. The daemon needs the same token as the API (as `SURFACE_API_KEY` or `--api-key`) and refuses to start without one:
+
+```bash
+SURFACE_API_KEY="your-surface-token" surface-scanner --daemon --listen=127.0.0.1:8090
+```
 
 ```python
 from surface import SurfaceClient
 
 client = SurfaceClient(mode="local", scanner_url="http://127.0.0.1:8090")
-result = client.scan_file("suspicious.exe")
+result = client.scan_file("invoice.pdf")
 print(result.safety_score.threat_level)
 ```
 
@@ -78,14 +94,16 @@ The client checks for an API key in this order:
 2. `SURFACE_KEY` environment variable
 
 ```bash
-export SURFACE_KEY="sfk_your_token_here"
+export SURFACE_KEY="your-surface-token"
 ```
+
+To get a token, create a key in the Surface dashboard under **Access Control → API keys** and copy the token (it is shown once). The token is the secret the SDK sends; the key's ID is not.
 
 In `mode="api"` an `AuthenticationError` is raised at construction time if neither is set.
 
 The hosted API URL defaults to production (`https://app.tendrl.com/surface/api`). Override with `base_url=` or `SURFACE_BASE_URL`.
 
-`mode="local"` is exempt: the local scanner daemon is unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). A key is still needed for the hosted calls — `get_usage`, `get_account`, and `get_scan_history` — which always go to the Surface API regardless of mode.
+`mode="local"` is exempt: the SDK's calls to the local daemon are unauthenticated and the client never sends the key to it, so a local client constructs fine without one (as in the Local Mode quick start above). The daemon itself still needs your token to start (see above). A key is still needed for the hosted calls — `get_usage`, `get_account`, and `get_scan_history` — which always go to the Surface API regardless of mode.
 
 ## Scanning Files
 
@@ -93,13 +111,13 @@ The hosted API URL defaults to production (`https://app.tendrl.com/surface/api`)
 
 ```python
 # From path, bytes, or file-like
-result = client.scan_file("malware.exe")
+result = client.scan_file("invoice.pdf")
 result = client.scan_file(file_bytes)
 result = client.scan_file(open("sample.zip", "rb"))
 
 # Reject malicious files — raises MaliciousFileError
-result = client.scan_file("upload.exe", reject="malicious")
-result = client.scan_file("upload.exe", reject=["malicious", "suspicious"])
+result = client.scan_file("upload.zip", reject="malicious")
+result = client.scan_file("upload.zip", reject=["malicious", "suspicious"])
 
 # Deferred scan (returns immediately, poll for results)
 deferred = client.scan_file("large_archive.zip", defer_scan=True)
@@ -307,7 +325,7 @@ from surface import scan, ScanResult
 def process(result: ScanResult):
     print(result.safety_score.threat_level)
 
-process("suspect.exe")  # pass file path, bytes, or file-like
+process("upload.zip")  # pass file path, bytes, or file-like
 
 # With filtering — raises MaliciousFileError on reject
 @scan(reject=["malicious", "suspicious"])
@@ -393,7 +411,7 @@ from surface import AsyncSurfaceClient
 
 async def main():
     async with AsyncSurfaceClient() as client:
-        result = await client.scan_file("suspicious.exe")
+        result = await client.scan_file("invoice.pdf")
         print(result.safety_score.threat_level)
 
 asyncio.run(main())
@@ -406,9 +424,9 @@ Scan multiple files concurrently with `scan_files()`. Concurrency is controlled 
 ```python
 async with AsyncSurfaceClient(max_concurrency=5) as client:
     results = await client.scan_files([
-        "file1.exe",
-        "file2.pdf",
-        "file3.zip",
+        "file1.pdf",
+        "file2.zip",
+        "file3.csv",
         Path("/uploads/doc.docx"),
     ])
     for result in results:
@@ -448,7 +466,7 @@ from surface import (
 )
 
 try:
-    result = client.scan_file("test.exe")
+    result = client.scan_file("test.pdf")
 except QuotaExceededError:
     print("Monthly scan quota exhausted")
 except RateLimitError:
