@@ -156,7 +156,7 @@ Set it once on the guard (`ToolGuard(client, strictness="strict")`) or the clien
 | Document to a free-mail address the `user_request` never named | Review | Review | Review |
 | Sensitive data (customers, directory, payroll, exports) to a free-mail address, with no `user_request` or one that names it | Allow | Allow | Block |
 | The same, when `user_request` never named the address | Review | Review | Block |
-| A message describing bulk data ("all customer records") to a free-mail address | Review | Review | Block |
+| Sensitive data to a free-mail address, in a message that describes it in bulk ("all customer records") | Review | Review | Block |
 | The same, with `personal_mail_expected` and the address named in `user_request` | Allow | Allow | Block |
 | Plain email to an outside company | Allow | Allow | Review |
 | Document to an outside recipient nobody named | Allow | Review | Review |
