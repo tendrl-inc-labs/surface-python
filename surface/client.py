@@ -280,12 +280,12 @@ class SurfaceClient:
     Usage::
 
         # API mode (default)
-        client = SurfaceClient("sfk_your_token_here")
-        result = client.scan_file("malware.exe")
+        client = SurfaceClient("your-surface-token")
+        result = client.scan_file("invoice.pdf")
 
         # Local mode — requires the scanner daemon running on localhost
-        client = SurfaceClient("sfk_your_token_here", mode="local")
-        result = client.scan_file("malware.exe")
+        client = SurfaceClient("your-surface-token", mode="local")
+        result = client.scan_file("invoice.pdf")
 
     ``timeout`` is the budget in seconds for each call, covering retries of
     502/503/504 and refused connections. When Surface gives no real answer in
@@ -574,12 +574,12 @@ class AsyncSurfaceClient:
 
     Usage::
 
-        async with AsyncSurfaceClient("sfk_your_token_here") as client:
-            result = await client.scan_file("malware.exe")
+        async with AsyncSurfaceClient("your-surface-token") as client:
+            result = await client.scan_file("invoice.pdf")
 
         # Batch scan multiple files concurrently
         async with AsyncSurfaceClient() as client:
-            results = await client.scan_files(["a.exe", "b.pdf", "c.zip"])
+            results = await client.scan_files(["a.pdf", "b.zip", "c.csv"])
 
     ``timeout`` works as on :class:`SurfaceClient`: seconds per call, retries
     included, then :class:`SurfaceUnavailableError`.
