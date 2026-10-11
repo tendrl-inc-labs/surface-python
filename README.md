@@ -35,7 +35,7 @@ The shortest integration is the `@scan` decorator: hand it a file, your function
 ```python
 from surface import ScanResult, scan
 
-@scan(reject=["Block"])   # refuse what the scanner recommends blocking
+@scan(reject=["Block", "Review"])   # uploads: refuse Block and Review
 def process(result: ScanResult):
     print(result.safety_score.threat_level)  # Clean, Informational, Suspicious, Risky, or Malicious
     # ... your logic runs only for accepted files
@@ -46,6 +46,8 @@ process("invoice.pdf")   # you pass the file; process() gets the result
 The examples scan documents and archives, which the Default scan profile accepts. Executables and scripts (`.exe`, `.sh`, ...) are refused by type with a `ValidationError` unless the key's profile allows them; see [scan profiles](https://tendrl.com/docs/surface/scan-profiles/).
 
 `reject` matches the recommended action (`"Block"`, `"Review"`) or the threat level (`"Malicious"`, `"Suspicious"`) — a rejected file raises `MaliciousFileError` before your function runs.
+
+For file uploads, reject `Review` as well as `Block`. `Block` needs precise evidence (a known-malware hash, an antivirus signature, a malware rule), so new malware recognized only by the models comes back as `Review`; rejecting `Block` alone lets most of it through. Agent tool calls are different: there `Review` means "confirm with the user" (see [Guarding an agent's tool calls](#guarding-an-agents-tool-calls)).
 
 Prefer to hold the client yourself? The same scan is one method call:
 
@@ -333,7 +335,7 @@ def process(result: ScanResult):
     ...
 
 # Local scanner + filtering
-@scan(reject="malicious", mode="local")
+@scan(reject=["Block", "Review"], mode="local")
 def process(result: ScanResult):
     ...
 ```
