@@ -460,6 +460,8 @@ async def upload(file: UploadFile):
 from surface import (
     SurfaceError,
     AuthenticationError,
+    PermissionDeniedError,
+    PlanRequiredError,
     QuotaExceededError,
     RateLimitError,
     NotFoundError,
@@ -469,11 +471,15 @@ from surface import (
 
 try:
     result = client.scan_file("test.pdf")
-except QuotaExceededError:
+except QuotaExceededError:          # 402
     print("Monthly scan quota exhausted")
-except RateLimitError:
+except PlanRequiredError as e:      # 403 code=plan_required, or 402 for defer_scan without async
+    print(f"Not on the {e.current_plan} plan: {e.feature}")
+except PermissionDeniedError as e:  # other 403: RBAC, blocked IP, payload scanning off
+    print(f"Not allowed: {e.message}")
+except RateLimitError:              # 429
     print("Rate limit hit, slow down")
-except AuthenticationError:
+except AuthenticationError:         # 401
     print("Invalid API key")
 except SurfaceUnavailableError:
     print("Surface gave no answer; nothing was scanned")
@@ -481,9 +487,11 @@ except SurfaceError as e:
     print(f"API error {e.status_code}: {e.message}")
 ```
 
+Every `SurfaceError` carries `status_code`, `message` (the server's `error` text), `request_id`, and `code` (the server's `code` field, when it sends one). `PlanRequiredError` is a `PermissionDeniedError`, so one `except PermissionDeniedError` covers every "not allowed" answer.
+
 ## When Surface is unavailable
 
-Anything that isn't a real answer from Surface raises `SurfaceUnavailableError` (a `SurfaceError`): a refused or reset connection, a DNS failure, the call's timeout running out, HTTP 500/502/503/504, or a non-4xx response whose body isn't the JSON the SDK expects (such as a proxy's HTML error page). `status_code` holds the HTTP status when there was one (0 otherwise), and the message includes the server's `error` text when it sent JSON. Every 4xx keeps its usual error whatever the body: a 429 still raises `RateLimitError`/`QuotaExceededError`, and other 4xx raise the same errors as before.
+Anything that isn't a real answer from Surface raises `SurfaceUnavailableError` (a `SurfaceError`): a refused or reset connection, a DNS failure, the call's timeout running out, HTTP 500/502/503/504, or a non-4xx response whose body isn't the JSON the SDK expects (such as a proxy's HTML error page). `status_code` holds the HTTP status when there was one (0 otherwise), and the message includes the server's `error` text when it sent JSON. Every 4xx keeps its usual error whatever the body: a 429 still raises `RateLimitError`, and other 4xx raise the same errors as before.
 
 Each call has a 60-second budget that covers every attempt and every wait in between. Change it per client:
 

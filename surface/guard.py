@@ -132,8 +132,9 @@ class ToolNeedsReview(ToolBlocked):
     """Raised by a wrapped tool on a Review verdict: a person should confirm it.
 
     A subclass of :class:`ToolBlocked`, so code that already catches that
-    stays safe. Catch this one first to ask the user and retry, e.g. with
-    ``guard.approved()``.
+    stays safe. Catch this one first to ask the user; once they confirm, call
+    the original tool (the wrapper's ``__wrapped__``), or pass an ``on_review``
+    callable to the guard so the question is asked before the tool runs.
     """
 
 
