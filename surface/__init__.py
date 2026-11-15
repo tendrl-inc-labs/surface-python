@@ -16,6 +16,8 @@ from .middleware import ScanMiddleware, scan_request
 from .errors import (
     AuthenticationError,
     NotFoundError,
+    PermissionDeniedError,
+    PlanRequiredError,
     QuotaExceededError,
     RateLimitError,
     SurfaceError,
@@ -79,6 +81,8 @@ __all__ = [
     "SurfaceUnavailableError",
     "AuthenticationError",
     "NotFoundError",
+    "PermissionDeniedError",
+    "PlanRequiredError",
     "QuotaExceededError",
     "RateLimitError",
     "ValidationError",

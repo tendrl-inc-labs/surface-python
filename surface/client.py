@@ -8,6 +8,7 @@ import hmac
 import os
 import socket
 import time
+import warnings
 from pathlib import Path
 from typing import IO, Any, TypeVar, Union
 
@@ -18,6 +19,8 @@ from .decorator import MaliciousFileError
 from .errors import (
     AuthenticationError,
     NotFoundError,
+    PermissionDeniedError,
+    PlanRequiredError,
     QuotaExceededError,
     RateLimitError,
     SurfaceError,
@@ -262,11 +265,57 @@ def _raise_for_status(resp: httpx.Response) -> None:
         raise NotFoundError(msg, request_id=rid)
     if status == 400:
         raise ValidationError(msg, request_id=rid)
+    code = body.get("code") if isinstance(body.get("code"), str) else None
+    if status in (402, 403) and _is_plan_wall(body, msg):
+        raise PlanRequiredError(
+            msg,
+            status_code=status,
+            request_id=rid,
+            code=code,
+            feature=_str_or_none(body.get("feature")),
+            current_plan=_str_or_none(body.get("current_plan")),
+        )
+    if status == 403:
+        raise PermissionDeniedError(msg, request_id=rid, code=code)
+    if status == 402 and _is_quota(msg):
+        raise QuotaExceededError(msg, request_id=rid)
     if status == 429:
-        if "quota" in msg.lower() or "credit" in msg.lower():
-            raise QuotaExceededError(msg, request_id=rid)
+        # Surface's 429s are all rate limits (per-plan, per-IP, failed-auth
+        # throttle); quota exhaustion is 402.
         raise RateLimitError(msg, request_id=rid)
-    raise SurfaceError(msg, status_code=status, request_id=rid)
+    raise SurfaceError(msg, status_code=status, request_id=rid, code=code)
+
+
+def _warn_payload_defer() -> None:
+    warnings.warn(
+        "scan_payload(defer_scan=True) has no effect: payload scans always run "
+        "synchronously. The argument will be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def _str_or_none(v: Any) -> str | None:
+    return v if isinstance(v, str) else None
+
+
+def _is_plan_wall(body: dict[str, Any], msg: str) -> bool:
+    """A plan entitlement answer: 403 code=plan_required, or the 402 that
+    ``?defer=true`` gets on a plan without async scanning (``feature`` set, no
+    ``code``). The local scanner's 402 for a plan without it says the same
+    words with no fields."""
+    return (
+        body.get("code") == "plan_required"
+        or "feature" in body
+        or "not included on the" in msg.lower()
+    )
+
+
+def _is_quota(msg: str) -> bool:
+    # Hosted: "monthly scan quota exceeded (N/M scans used)".
+    # Local scanner: "this plan's N local scans for the month are used up".
+    m = msg.lower()
+    return "quota" in m or "used up" in m
 
 
 class SurfaceClient:
@@ -451,7 +500,9 @@ class SurfaceClient:
             payload: Raw string or bytes to scan. Strings are sent raw.
                 Binary bytes are auto-base64-encoded.
             label: Optional label for the scan (e.g. "api-request").
-            defer_scan: If True, returns immediately with a scan ID to poll.
+            defer_scan: Deprecated; has no effect. Payload scans always run
+                synchronously (the server has no deferred path for them), so
+                passing True only emits a ``DeprecationWarning``.
             request_id: Optional client-generated request ID.
             reject: Threat levels ("Malicious"/"Suspicious") or recommended
                 actions ("Block"/"Review") to reject. Raises MaliciousFileError if matched.
@@ -483,7 +534,7 @@ class SurfaceClient:
 
         params: dict[str, str] = {}
         if defer_scan:
-            params["defer"] = "true"
+            _warn_payload_defer()
         # The backend derives the request ID from the X-Request-ID header.
         headers = {"X-Request-ID": request_id} if request_id else None
 
@@ -730,7 +781,7 @@ class AsyncSurfaceClient:
         Args:
             payload: Raw string or bytes to scan.
             label: Optional label for the scan.
-            defer_scan: If True, returns immediately with a scan ID to poll.
+            defer_scan: Deprecated; has no effect (see ``SurfaceClient.scan_payload``).
             request_id: Optional client-generated request ID.
             reject: Threat levels ("Malicious"/"Suspicious") or recommended
                 actions ("Block"/"Review") to reject.
@@ -757,7 +808,7 @@ class AsyncSurfaceClient:
 
         params: dict[str, str] = {}
         if defer_scan:
-            params["defer"] = "true"
+            _warn_payload_defer()
         # The backend derives the request ID from the X-Request-ID header.
         headers = {"X-Request-ID": request_id} if request_id else None
 
